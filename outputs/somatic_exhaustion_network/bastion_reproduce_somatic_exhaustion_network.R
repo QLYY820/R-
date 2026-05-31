@@ -41,7 +41,7 @@ RUN_BOOTSTRAP <- FALSE
 BOOT_N <- 50
 
 # 输出目录。RStudio Server 默认保存到当前工作目录下。
-OUT_DIR <- file.path(getwd(), "somatic_exhaustion_network_R_outputs")
+OUT_DIR <- file.path(getwd(), "somatic_exhaustion_network_R_outputs_main_qc")
 dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
 if (FAST_TEST) {
@@ -138,7 +138,12 @@ pain7_cols  <- paste0("E_q24_", 1:9, "_4")  # 7天
 fatigue_cols <- paste0("G_q3_", 1:14)
 reverse_fatigue_items <- c(10, 13, 14)
 
-needed_cols <- unique(c(pain12_cols, pain7_cols, fatigue_cols))
+time_cols <- c("timetaken.x", "timetaken.y", "timetaken.x.x", "timetaken.y.y")
+demo_core_cols <- c(
+  "id", "A_q2", "A_year", "A_q5", "work_y", "A_q9", "A_q10", "A_q11",
+  "A_q12", "A_q15", "A_q16", "C_q1", "C_q8", "C_q42", "C_q44"
+)
+needed_cols <- unique(c("id", "A_year", "work_y", time_cols, pain12_cols, pain7_cols, fatigue_cols))
 missing_cols <- setdiff(needed_cols, names(raw))
 if (length(missing_cols) > 0) {
   stop("原始数据缺少以下列：\n", paste(missing_cols, collapse = ", "))
@@ -177,15 +182,6 @@ build_nodes <- function(raw, pain_cols) {
   dat
 }
 
-dat12 <- build_nodes(raw, pain12_cols)
-dat7  <- build_nodes(raw, pain7_cols)
-
-data.table::fwrite(dat12, file.path(OUT_DIR, "selected_nodes_12m.csv"))
-data.table::fwrite(dat7,  file.path(OUT_DIR, "selected_nodes_7d.csv"))
-data.table::fwrite(node_info, file.path(OUT_DIR, "node_dictionary.csv"))
-
-# ---------------------- 4. 人口学/职业特征表 -----------------
-
 clean_num <- function(x) {
   suppressWarnings(as.numeric(as.character(x)))
 }
@@ -193,6 +189,133 @@ clean_num <- function(x) {
 safe_col <- function(df, nm) {
   if (nm %in% names(df)) df[[nm]] else rep(NA, nrow(df))
 }
+
+apply_main_qc <- function(raw) {
+  n <- nrow(raw)
+  age <- 2025 - clean_num(safe_col(raw, "A_year"))
+  tenure <- 2025 - clean_num(safe_col(raw, "work_y"))
+
+  time_df <- as.data.frame(lapply(time_cols, function(nm) clean_num(safe_col(raw, nm))))
+  complete_time <- stats::complete.cases(time_df)
+  total_time <- rowSums(time_df, na.rm = FALSE)
+  total_time[!complete_time] <- NA_real_
+
+  id_chr <- trimws(as.character(safe_col(raw, "id")))
+  duplicate_id <- id_chr != "" & !is.na(id_chr) &
+    (duplicated(id_chr) | duplicated(id_chr, fromLast = TRUE))
+
+  invalid_age <- is.na(age) | age < 18 | age > 65
+  invalid_tenure <- is.na(tenure) | tenure < 1
+  inconsistent_age_tenure <- !invalid_age & !invalid_tenure & tenure > (age - 16)
+  short_completion_time <- is.na(total_time) | total_time < 600
+
+  pain12_raw <- as.data.frame(lapply(raw[pain12_cols], to01_pain))
+  pain7_raw <- as.data.frame(lapply(raw[pain7_cols], to01_pain))
+  nmq_logic_inconsistent <- rowSums((pain7_raw == 1) & (pain12_raw == 0), na.rm = TRUE) > 0
+
+  keep <- !(invalid_age | invalid_tenure | inconsistent_age_tenure |
+              short_completion_time | duplicate_id)
+
+  qc_records <- data.frame(
+    source_row = seq_len(n),
+    age = age,
+    work_tenure = tenure,
+    total_completion_time_seconds = total_time,
+    invalid_age = invalid_age,
+    invalid_tenure = invalid_tenure,
+    inconsistent_age_tenure = inconsistent_age_tenure,
+    short_completion_time = short_completion_time,
+    nmq_logic_inconsistent = nmq_logic_inconsistent,
+    duplicate_id = duplicate_id,
+    keep = keep,
+    stringsAsFactors = FALSE
+  )
+
+  current <- rep(TRUE, n)
+  flow <- data.frame(step = "Raw records", n_excluded_at_step = 0L, n_remaining = n)
+  add_step <- function(label, flag, exclude = TRUE) {
+    excluded <- current & flag
+    if (exclude) current <<- current & !flag
+    flow <<- rbind(
+      flow,
+      data.frame(
+        step = label,
+        n_excluded_at_step = if (exclude) sum(excluded) else 0L,
+        n_remaining = sum(current),
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+  add_step("Age outside 18-65 years or missing", invalid_age)
+  add_step("Work tenure <1 year or missing", invalid_tenure)
+  add_step("Work tenure greater than age minus 16 years", inconsistent_age_tenure)
+  add_step("Total completion time <10 minutes or missing", short_completion_time)
+  add_step("NMQ 7-day yes but 12-month no; flagged only, not excluded",
+           nmq_logic_inconsistent, exclude = FALSE)
+  add_step("Duplicated participant id", duplicate_id)
+
+  component_counts <- data.frame(
+    criterion = c(
+      "Age outside 18-65 years or missing",
+      "Work tenure <1 year or missing",
+      "Work tenure greater than age minus 16 years",
+      "Total completion time <10 minutes or missing",
+      "NMQ 7-day yes but 12-month no",
+      "Duplicated participant id"
+    ),
+    n_flagged_overall = c(
+      sum(invalid_age), sum(invalid_tenure), sum(inconsistent_age_tenure),
+      sum(short_completion_time), sum(nmq_logic_inconsistent), sum(duplicate_id)
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  summary <- data.frame(
+    metric = c("raw_n", "final_qc_keep", "final_qc_excluded"),
+    value = c(n, sum(keep), n - sum(keep)),
+    stringsAsFactors = FALSE
+  )
+
+  list(
+    keep = keep,
+    age = age,
+    tenure = tenure,
+    total_time = total_time,
+    records = qc_records,
+    flow = flow,
+    component_counts = component_counts,
+    summary = summary
+  )
+}
+
+qc <- apply_main_qc(raw)
+raw_qc <- raw[qc$keep, , drop = FALSE]
+
+message("质控后样本量：", nrow(raw_qc), " / ", nrow(raw))
+message("NMQ 7天=是且12个月=否：仅标记，不排除；保留样本中标记人数 = ",
+        sum(qc$records$keep & qc$records$nmq_logic_inconsistent))
+
+dat12 <- build_nodes(raw_qc, pain12_cols)
+dat7  <- build_nodes(raw_qc, pain7_cols)
+
+data.table::fwrite(qc$flow, file.path(OUT_DIR, "quality_control_flow.csv"))
+data.table::fwrite(qc$component_counts, file.path(OUT_DIR, "quality_control_component_counts.csv"))
+data.table::fwrite(qc$records, file.path(OUT_DIR, "quality_control_record_flags.csv"))
+data.table::fwrite(qc$summary, file.path(OUT_DIR, "quality_control_summary.csv"))
+data.table::fwrite(dat12, file.path(OUT_DIR, "selected_nodes_12m_cleaned.csv"))
+data.table::fwrite(dat7,  file.path(OUT_DIR, "selected_nodes_7d_cleaned.csv"))
+data.table::fwrite(dat12, file.path(OUT_DIR, "selected_nodes_12m.csv"))
+data.table::fwrite(dat7,  file.path(OUT_DIR, "selected_nodes_7d.csv"))
+
+demo_existing <- intersect(demo_core_cols, names(raw_qc))
+demo_core <- raw_qc[, demo_existing, drop = FALSE]
+demo_core$age <- qc$age[qc$keep]
+demo_core$work_tenure <- qc$tenure[qc$keep]
+demo_core$total_completion_time_seconds <- qc$total_time[qc$keep]
+data.table::fwrite(demo_core, file.path(OUT_DIR, "cleaned_demographic_core.csv"))
+data.table::fwrite(node_info, file.path(OUT_DIR, "node_dictionary.csv"))
+
+# ---------------------- 4. 人口学/职业特征表 -----------------
 
 make_demo_table <- function(raw) {
   n <- nrow(raw)
@@ -261,7 +384,7 @@ make_demo_table <- function(raw) {
   )
 }
 
-demo_table <- make_demo_table(raw)
+demo_table <- make_demo_table(raw_qc)
 data.table::fwrite(demo_table, file.path(OUT_DIR, "Table1_demographic_occupational_characteristics.csv"))
 
 # ---------------------- 5. Ising 网络估计 --------------------
