@@ -16,7 +16,8 @@
 # Clearing everything would remove objects such as `合并数据`.
 DATA_OBJECT_CANDIDATES <- c("合并数据", "合并数据64114_去重后", "data")
 keep_data_objects <- intersect(DATA_OBJECT_CANDIDATES, ls(envir = .GlobalEnv))
-rm(list = setdiff(ls(envir = .GlobalEnv), keep_data_objects), envir = .GlobalEnv)
+rm(list = setdiff(ls(envir = .GlobalEnv), c(keep_data_objects, "DATA_OBJECT_CANDIDATES")),
+   envir = .GlobalEnv)
 options(stringsAsFactors = FALSE)
 set.seed(20260531)
 

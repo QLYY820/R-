@@ -2,7 +2,7 @@
 # Run this line in RStudio Server:
 # source("https://raw.githubusercontent.com/QLYY820/R-/net/open.R")
 
-u <- "https://raw.githubusercontent.com/QLYY820/R-/net/outputs/somatic_exhaustion_network/bastion_reproduce_somatic_exhaustion_network.R"
+u <- "https://raw.githubusercontent.com/QLYY820/R-/net/outputs/somatic_exhaustion_network/bastion_reproduce_somatic_exhaustion_network.R?v=20260531_mainqc_fix"
 f <- "nurse_network.R"
 download.file(u, f, mode = "wb")
 if (requireNamespace("rstudioapi", quietly = TRUE)) {
@@ -10,4 +10,3 @@ if (requireNamespace("rstudioapi", quietly = TRUE)) {
 } else {
   file.edit(f)
 }
-
