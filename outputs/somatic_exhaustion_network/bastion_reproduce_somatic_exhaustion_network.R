@@ -70,17 +70,6 @@ install_and_load(packages)
 # ---------------------- 2. 读取数据 --------------------------
 
 get_raw_data <- function() {
-  candidate_objects <- DATA_OBJECT_CANDIDATES
-  for (nm in candidate_objects) {
-    if (exists(nm, envir = .GlobalEnv, inherits = FALSE)) {
-      obj <- get(nm, envir = .GlobalEnv)
-      if (is.data.frame(obj)) {
-        message("使用环境中的数据对象：", nm)
-        return(as.data.frame(obj))
-      }
-    }
-  }
-
   candidate_files <- c(
     "data.xlsx",
     "合并数据.xlsx",
@@ -90,6 +79,17 @@ get_raw_data <- function() {
     if (file.exists(fp)) {
       message("读取当前目录文件：", fp)
       return(as.data.frame(readxl::read_excel(fp, .name_repair = "unique")))
+    }
+  }
+
+  candidate_objects <- DATA_OBJECT_CANDIDATES
+  for (nm in candidate_objects) {
+    if (exists(nm, envir = .GlobalEnv, inherits = FALSE)) {
+      obj <- get(nm, envir = .GlobalEnv)
+      if (is.data.frame(obj)) {
+        message("使用环境中的数据对象：", nm)
+        return(as.data.frame(obj))
+      }
     }
   }
 
