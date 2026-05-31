@@ -2,7 +2,7 @@
 # Run this line in RStudio Server:
 # source("https://raw.githubusercontent.com/QLYY820/R-/net/nn.R")
 
-u <- "https://raw.githubusercontent.com/QLYY820/R-/net/outputs/somatic_exhaustion_network/bastion_reproduce_somatic_exhaustion_network.R?v=20260531_prefer_dataxlsx"
+u <- "https://raw.githubusercontent.com/QLYY820/R-/net/outputs/somatic_exhaustion_network/bastion_reproduce_somatic_exhaustion_network.R?v=20260601_bridge_boot_cs"
 f <- "nurse_network.R"
 download.file(u, f, mode = "wb")
 source(f, encoding = "UTF-8")

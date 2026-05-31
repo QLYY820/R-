@@ -23,23 +23,47 @@ set.seed(20260531)
 
 # ---------------------- 0. 用户设置 -------------------------
 
+# Settings can be changed without editing this file by setting environment
+# variables before source(). The short GitHub loaders do this automatically.
+env_flag <- function(name, default = FALSE) {
+  value <- Sys.getenv(name, unset = NA_character_)
+  if (is.na(value) || !nzchar(value)) return(default)
+  tolower(value) %in% c("1", "true", "yes", "y")
+}
+
+env_int <- function(name, default) {
+  value <- suppressWarnings(as.integer(Sys.getenv(name, unset = NA_character_)))
+  ifelse(is.na(value), default, value)
+}
+
+env_chr <- function(name, default) {
+  value <- Sys.getenv(name, unset = NA_character_)
+  if (is.na(value) || !nzchar(value)) default else value
+}
+
 # 第一次试跑建议 TRUE，只跑前 1500 行，并用 Monte Carlo NIRA。
 # 正式复现改成 FALSE。
-FAST_TEST <- FALSE
+FAST_TEST <- env_flag("SOMATIC_FAST_TEST", FALSE)
 
 # 是否安装缺失包。堡垒机如果不能联网，可改成 FALSE，
 # 然后请管理员预装 data.table/readxl/dplyr/ggplot2/glmnet/igraph/scales。
-INSTALL_MISSING <- TRUE
+INSTALL_MISSING <- env_flag("SOMATIC_INSTALL_MISSING", TRUE)
 
 # NIRA_MODE:
 # "exact" = 精确枚举 2^23 种状态，推荐正式结果使用，但耗时更久。
 # "mc"    = Monte Carlo Gibbs 抽样，推荐先测试。
-NIRA_MODE <- "exact"
+NIRA_MODE <- env_chr("SOMATIC_NIRA_MODE", "exact")
 
 # Bootstrap 很耗时。投稿最终版建议 TRUE 且 BOOT_N = 1000；
 # 复现主结果和模拟干预时可先 FALSE。
-RUN_BOOTSTRAP <- FALSE
-BOOT_N <- 50
+RUN_BOOTSTRAP <- env_flag("SOMATIC_RUN_BOOTSTRAP", FALSE)
+BOOT_N <- env_int("SOMATIC_BOOT_N", 50)
+RUN_CASE_STABILITY <- env_flag("SOMATIC_RUN_CASE_STABILITY", RUN_BOOTSTRAP)
+BOOT_CASE_N <- env_int("SOMATIC_BOOT_CASE_N", BOOT_N)
+BOOT_SEED <- env_int("SOMATIC_BOOT_SEED", 20260531)
+CS_COR_THRESHOLD <- 0.70
+CS_QUANTILE <- 0.05
+CASE_DROP_PROPORTIONS <- c(0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70)
 
 # 输出目录。RStudio Server 默认保存到当前工作目录下。
 OUT_DIR <- file.path(getwd(), "somatic_exhaustion_network_R_outputs_main_qc")
@@ -48,6 +72,7 @@ dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 if (FAST_TEST) {
   NIRA_MODE <- "mc"
   RUN_BOOTSTRAP <- FALSE
+  RUN_CASE_STABILITY <- FALSE
 }
 
 # ---------------------- 1. 安装并加载包 ----------------------
@@ -572,7 +597,172 @@ node_predictability <- function(dat, W) {
   dplyr::bind_rows(rows)
 }
 
-# ---------------------- 6. NIRA 模拟干预 ---------------------
+# ---------------------- 6. Bootstrap and stability -----------------------
+
+safe_cor <- function(x, y) {
+  ok <- is.finite(x) & is.finite(y)
+  if (sum(ok) < 3 || stats::sd(x[ok]) == 0 || stats::sd(y[ok]) == 0) return(NA_real_)
+  suppressWarnings(stats::cor(x[ok], y[ok], method = "spearman"))
+}
+
+all_edge_weights <- function(W) {
+  nodes <- colnames(W)
+  rows <- list()
+  k <- 1
+  for (i in seq_len(ncol(W) - 1)) {
+    for (j in (i + 1):ncol(W)) {
+      rows[[k]] <- data.frame(
+        source = nodes[i],
+        target = nodes[j],
+        source_abbr = node_info[nodes[i], "abbr"],
+        target_abbr = node_info[nodes[j], "abbr"],
+        pair = paste(node_info[nodes[i], "abbr"], node_info[nodes[j], "abbr"], sep = "--"),
+        weight = W[i, j],
+        abs_weight = abs(W[i, j]),
+        stringsAsFactors = FALSE
+      )
+      k <- k + 1
+    }
+  }
+  dplyr::bind_rows(rows)
+}
+
+metric_table_for_stability <- function(W) {
+  centrality_summary(W) |>
+    dplyr::select(node, strength, expected_influence,
+                  bridge_strength, bridge_expected_influence)
+}
+
+bootstrap_network <- function(dat, W_original, B = 50, gamma = 0.25,
+                              rule = "AND", seed = 20260531) {
+  set.seed(seed)
+  dat <- as.data.frame(dat)
+  nodes <- names(dat)
+  p <- length(nodes)
+  n <- nrow(dat)
+
+  original_edges <- all_edge_weights(W_original) |>
+    dplyr::rename(original_weight = weight, original_abs_weight = abs_weight)
+
+  edge_store <- matrix(NA_real_, nrow = B, ncol = nrow(original_edges))
+  colnames(edge_store) <- original_edges$pair
+
+  metric_names <- c("strength", "expected_influence",
+                    "bridge_strength", "bridge_expected_influence")
+  metric_store <- array(
+    NA_real_,
+    dim = c(B, p, length(metric_names)),
+    dimnames = list(paste0("boot_", seq_len(B)), nodes, metric_names)
+  )
+
+  for (b in seq_len(B)) {
+    message(sprintf("Bootstrap %d/%d", b, B))
+    idx <- sample.int(n, n, replace = TRUE)
+    Wb <- estimate_ising_glmnet(dat[idx, , drop = FALSE], gamma = gamma, rule = rule)$W
+    edge_store[b, ] <- all_edge_weights(Wb)$weight
+
+    cb <- metric_table_for_stability(Wb)
+    cb <- cb[match(nodes, cb$node), , drop = FALSE]
+    for (m in metric_names) metric_store[b, , m] <- cb[[m]]
+  }
+
+  edge_ci <- cbind(
+    original_edges,
+    boot_mean = colMeans(edge_store, na.rm = TRUE),
+    boot_lcl = apply(edge_store, 2, stats::quantile, probs = 0.025, na.rm = TRUE),
+    boot_ucl = apply(edge_store, 2, stats::quantile, probs = 0.975, na.rm = TRUE)
+  )
+
+  centrality_rows <- list()
+  k <- 1
+  for (m in metric_names) {
+    vals <- metric_store[, , m, drop = FALSE][, , 1]
+    centrality_rows[[k]] <- data.frame(
+      metric = m,
+      node = nodes,
+      abbr = node_info[nodes, "abbr"],
+      label_en = node_info[nodes, "label_en"],
+      community = node_info[nodes, "community"],
+      boot_mean = colMeans(vals, na.rm = TRUE),
+      boot_lcl = apply(vals, 2, stats::quantile, probs = 0.025, na.rm = TRUE),
+      boot_ucl = apply(vals, 2, stats::quantile, probs = 0.975, na.rm = TRUE),
+      stringsAsFactors = FALSE
+    )
+    k <- k + 1
+  }
+
+  list(
+    edge_ci = edge_ci,
+    centrality_ci = dplyr::bind_rows(centrality_rows)
+  )
+}
+
+case_drop_stability <- function(dat, W_original, B = 50, gamma = 0.25,
+                                rule = "AND", seed = 20260531) {
+  set.seed(seed + 101)
+  dat <- as.data.frame(dat)
+  nodes <- names(dat)
+  n <- nrow(dat)
+  metric_names <- c("strength", "expected_influence",
+                    "bridge_strength", "bridge_expected_influence")
+  original <- metric_table_for_stability(W_original)
+  original <- original[match(nodes, original$node), , drop = FALSE]
+
+  rows <- list()
+  k <- 1
+  for (drop_prop in CASE_DROP_PROPORTIONS) {
+    keep_n <- max(50, floor(n * (1 - drop_prop)))
+    if (keep_n >= n) next
+    for (b in seq_len(B)) {
+      message(sprintf("Case-drop stability drop=%.0f%% %d/%d",
+                      100 * drop_prop, b, B))
+      idx <- sample.int(n, keep_n, replace = FALSE)
+      Wb <- estimate_ising_glmnet(dat[idx, , drop = FALSE], gamma = gamma, rule = rule)$W
+      cb <- metric_table_for_stability(Wb)
+      cb <- cb[match(nodes, cb$node), , drop = FALSE]
+
+      for (m in metric_names) {
+        rows[[k]] <- data.frame(
+          drop_proportion = drop_prop,
+          retained_n = keep_n,
+          replicate = b,
+          metric = m,
+          correlation = safe_cor(original[[m]], cb[[m]]),
+          stringsAsFactors = FALSE
+        )
+        k <- k + 1
+      }
+    }
+  }
+
+  raw <- dplyr::bind_rows(rows)
+  summary <- raw |>
+    dplyr::group_by(metric, drop_proportion, retained_n) |>
+    dplyr::summarise(
+      mean_correlation = mean(correlation, na.rm = TRUE),
+      q05_correlation = stats::quantile(correlation, CS_QUANTILE, na.rm = TRUE),
+      q95_correlation = stats::quantile(correlation, 0.95, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  cs <- summary |>
+    dplyr::group_by(metric) |>
+    dplyr::summarise(
+      cs_coefficient = ifelse(
+        any(q05_correlation >= CS_COR_THRESHOLD, na.rm = TRUE),
+        max(drop_proportion[q05_correlation >= CS_COR_THRESHOLD], na.rm = TRUE),
+        0
+      ),
+      threshold = CS_COR_THRESHOLD,
+      quantile = CS_QUANTILE,
+      boot_case_n = B,
+      .groups = "drop"
+    )
+
+  list(raw = raw, summary = summary, cs = cs)
+}
+
+# ---------------------- 7. NIRA 模拟干预 ---------------------
 
 sigmoid <- function(x) plogis(pmin(pmax(x, -35), 35))
 
@@ -899,6 +1089,146 @@ plot_network <- function(W, prefix) {
                   p, width = 9.5, height = 6.5, dpi = 300)
 }
 
+plot_centrality_and_bridge <- function(centrality, prefix) {
+  top_strength <- centrality |>
+    dplyr::arrange(dplyr::desc(strength)) |>
+    dplyr::slice_head(n = 12)
+  p_strength <- ggplot2::ggplot(
+    top_strength,
+    ggplot2::aes(x = stats::reorder(abbr, strength), y = strength, fill = community)
+  ) +
+    ggplot2::geom_col(width = 0.72) +
+    ggplot2::coord_flip() +
+    ggplot2::scale_fill_manual(values = c(Pain = "#E76F51", Physical = "#2A9D8F", Mental = "#457B9D")) +
+    ggplot2::labs(x = NULL, y = "Strength", title = "Top strength centrality nodes") +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(legend.position = "bottom")
+  ggplot2::ggsave(file.path(OUT_DIR, paste0(prefix, "_centrality_strength.png")),
+                  p_strength, width = 7.2, height = 5.2, dpi = 300)
+
+  pain_clust <- centrality |>
+    dplyr::filter(community == "Pain") |>
+    dplyr::arrange(dplyr::desc(clustering))
+  p_clust <- ggplot2::ggplot(
+    pain_clust,
+    ggplot2::aes(x = stats::reorder(abbr, clustering), y = clustering)
+  ) +
+    ggplot2::geom_col(width = 0.72, fill = "#E76F51") +
+    ggplot2::coord_flip() +
+    ggplot2::labs(x = NULL, y = "Local clustering", title = "Pain-node local clustering") +
+    ggplot2::theme_minimal(base_size = 12)
+  ggplot2::ggsave(file.path(OUT_DIR, paste0(prefix, "_pain_clustering.png")),
+                  p_clust, width = 7.2, height = 4.4, dpi = 300)
+
+  bridge_strength <- centrality |>
+    dplyr::arrange(dplyr::desc(bridge_strength))
+  p_bridge_strength <- ggplot2::ggplot(
+    bridge_strength,
+    ggplot2::aes(x = stats::reorder(abbr, bridge_strength), y = bridge_strength, fill = community)
+  ) +
+    ggplot2::geom_col(width = 0.72) +
+    ggplot2::coord_flip() +
+    ggplot2::scale_fill_manual(values = c(Pain = "#E76F51", Physical = "#2A9D8F", Mental = "#457B9D")) +
+    ggplot2::labs(x = NULL, y = "Bridge strength", title = "Bridge centrality: strength") +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(legend.position = "bottom")
+  ggplot2::ggsave(file.path(OUT_DIR, paste0(prefix, "_bridge_strength.png")),
+                  p_bridge_strength, width = 7.2, height = 5.2, dpi = 300)
+
+  bridge_ei <- centrality |>
+    dplyr::mutate(abs_bridge_ei = abs(bridge_expected_influence)) |>
+    dplyr::arrange(dplyr::desc(abs_bridge_ei))
+  p_bridge_ei <- ggplot2::ggplot(
+    bridge_ei,
+    ggplot2::aes(x = stats::reorder(abbr, bridge_expected_influence),
+                 y = bridge_expected_influence, fill = community)
+  ) +
+    ggplot2::geom_hline(yintercept = 0, colour = "grey55", linewidth = 0.35) +
+    ggplot2::geom_col(width = 0.72) +
+    ggplot2::coord_flip() +
+    ggplot2::scale_fill_manual(values = c(Pain = "#E76F51", Physical = "#2A9D8F", Mental = "#457B9D")) +
+    ggplot2::labs(x = NULL, y = "Bridge expected influence",
+                  title = "Bridge centrality: expected influence") +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(legend.position = "bottom")
+  ggplot2::ggsave(file.path(OUT_DIR, paste0(prefix, "_bridge_expected_influence.png")),
+                  p_bridge_ei, width = 7.2, height = 5.2, dpi = 300)
+}
+
+plot_bootstrap_outputs <- function(boot, prefix) {
+  edge_plot_data <- boot$edge_ci |>
+    dplyr::filter(original_abs_weight > 0) |>
+    dplyr::arrange(dplyr::desc(original_abs_weight)) |>
+    dplyr::slice_head(n = 30)
+  if (nrow(edge_plot_data) > 0) {
+    p_edge <- ggplot2::ggplot(
+      edge_plot_data,
+      ggplot2::aes(x = stats::reorder(pair, original_abs_weight), y = original_weight)
+    ) +
+      ggplot2::geom_errorbar(ggplot2::aes(ymin = boot_lcl, ymax = boot_ucl),
+                             width = 0.18, colour = "grey35") +
+      ggplot2::geom_point(size = 2.1, colour = "#2563EB") +
+      ggplot2::coord_flip() +
+      ggplot2::labs(x = NULL, y = "Edge weight with 95% bootstrap CI",
+                    title = "Bootstrap accuracy: strongest edges") +
+      ggplot2::theme_minimal(base_size = 12)
+    ggplot2::ggsave(file.path(OUT_DIR, paste0(prefix, "_bootstrap_edge_accuracy.png")),
+                    p_edge, width = 8.4, height = 7.2, dpi = 300)
+  }
+
+  strength_plot_data <- boot$centrality_ci |>
+    dplyr::filter(metric == "strength")
+  p_cent <- ggplot2::ggplot(
+    strength_plot_data,
+    ggplot2::aes(x = stats::reorder(abbr, boot_mean), y = boot_mean, fill = community)
+  ) +
+    ggplot2::geom_errorbar(ggplot2::aes(ymin = boot_lcl, ymax = boot_ucl),
+                           width = 0.18, colour = "grey35") +
+    ggplot2::geom_col(width = 0.72, alpha = 0.82) +
+    ggplot2::coord_flip() +
+    ggplot2::scale_fill_manual(values = c(Pain = "#E76F51", Physical = "#2A9D8F", Mental = "#457B9D")) +
+    ggplot2::labs(x = NULL, y = "Strength with 95% bootstrap CI",
+                  title = "Bootstrap accuracy: strength centrality") +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(legend.position = "bottom")
+  ggplot2::ggsave(file.path(OUT_DIR, paste0(prefix, "_bootstrap_strength_accuracy.png")),
+                  p_cent, width = 7.2, height = 6.4, dpi = 300)
+}
+
+plot_case_drop_stability <- function(stability, prefix) {
+  metric_labels <- c(
+    strength = "Strength",
+    expected_influence = "Expected influence",
+    bridge_strength = "Bridge strength",
+    bridge_expected_influence = "Bridge expected influence"
+  )
+  plot_df <- stability$summary
+  plot_df$metric_label <- metric_labels[plot_df$metric]
+
+  p <- ggplot2::ggplot(
+    plot_df,
+    ggplot2::aes(x = drop_proportion, y = mean_correlation,
+                 ymin = q05_correlation, ymax = q95_correlation,
+                 colour = metric_label, fill = metric_label)
+  ) +
+    ggplot2::geom_hline(yintercept = CS_COR_THRESHOLD, linetype = "dashed",
+                        colour = "grey35", linewidth = 0.35) +
+    ggplot2::geom_ribbon(alpha = 0.12, colour = NA) +
+    ggplot2::geom_line(linewidth = 0.75) +
+    ggplot2::geom_point(size = 1.8) +
+    ggplot2::scale_x_continuous(labels = scales::percent_format(accuracy = 1),
+                                breaks = CASE_DROP_PROPORTIONS) +
+    ggplot2::scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+    ggplot2::labs(x = "Proportion of cases dropped",
+                  y = "Correlation with original centrality",
+                  colour = NULL, fill = NULL,
+                  title = "Case-dropping bootstrap stability") +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(legend.position = "bottom")
+  ggplot2::ggsave(file.path(OUT_DIR, paste0(prefix, "_case_drop_stability.png")),
+                  p, width = 8.2, height = 5.4, dpi = 300)
+}
+
 plot_nira <- function(nira, prefix, n_top = 12) {
   make_panel <- function(dat, label) {
     dat <- dat |>
@@ -980,6 +1310,7 @@ analyze_one <- function(dat, prefix) {
   pred <- node_predictability(dat, W)
   centrality <- dplyr::left_join(centrality, pred, by = "node")
   data.table::fwrite(centrality, file.path(OUT_DIR, paste0(prefix, "_centrality_predictability.csv")))
+  plot_centrality_and_bridge(centrality, prefix)
 
   bridge_edges <- edges |>
     dplyr::filter(source_community != target_community) |>
@@ -1000,6 +1331,26 @@ analyze_one <- function(dat, prefix) {
   data.table::fwrite(network_summary, file.path(OUT_DIR, paste0(prefix, "_network_summary.csv")))
 
   plot_network(W, prefix)
+
+  boot <- NULL
+  stability <- NULL
+  if (RUN_BOOTSTRAP) {
+    message("Running nonparametric bootstrap for edge and centrality accuracy...")
+    boot <- bootstrap_network(dat, W, B = BOOT_N, gamma = 0.25, rule = "AND", seed = BOOT_SEED)
+    data.table::fwrite(boot$edge_ci, file.path(OUT_DIR, paste0(prefix, "_bootstrap_edge_ci.csv")))
+    data.table::fwrite(boot$centrality_ci, file.path(OUT_DIR, paste0(prefix, "_bootstrap_centrality_ci.csv")))
+    plot_bootstrap_outputs(boot, prefix)
+  }
+
+  if (RUN_CASE_STABILITY) {
+    message("Running case-dropping bootstrap for centrality stability and CS coefficients...")
+    stability <- case_drop_stability(dat, W, B = BOOT_CASE_N, gamma = 0.25,
+                                     rule = "AND", seed = BOOT_SEED)
+    data.table::fwrite(stability$raw, file.path(OUT_DIR, paste0(prefix, "_case_drop_stability_raw.csv")))
+    data.table::fwrite(stability$summary, file.path(OUT_DIR, paste0(prefix, "_case_drop_stability_summary.csv")))
+    data.table::fwrite(stability$cs, file.path(OUT_DIR, paste0(prefix, "_cs_coefficients.csv")))
+    plot_case_drop_stability(stability, prefix)
+  }
 
   message("运行 NIRA 模拟干预...")
   if (NIRA_MODE == "exact") {
@@ -1023,6 +1374,8 @@ analyze_one <- function(dat, prefix) {
     W = W,
     edges = edges,
     centrality = centrality,
+    boot = boot,
+    stability = stability,
     nira = nira,
     summary = network_summary
   )
@@ -1035,6 +1388,18 @@ sensitivity_7d <- analyze_one(dat7, "sensitivity_7d")
 
 combined_summary <- dplyr::bind_rows(primary_12m$summary, sensitivity_7d$summary)
 data.table::fwrite(combined_summary, file.path(OUT_DIR, "combined_network_summary.csv"))
+
+if (!is.null(primary_12m$stability) || !is.null(sensitivity_7d$stability)) {
+  cs_all <- dplyr::bind_rows(
+    if (!is.null(primary_12m$stability)) {
+      cbind(analysis = "primary_12m", primary_12m$stability$cs)
+    },
+    if (!is.null(sensitivity_7d$stability)) {
+      cbind(analysis = "sensitivity_7d", sensitivity_7d$stability$cs)
+    }
+  )
+  data.table::fwrite(cs_all, file.path(OUT_DIR, "combined_cs_coefficients.csv"))
+}
 
 message("\n全部完成。输出目录：")
 message(OUT_DIR)
