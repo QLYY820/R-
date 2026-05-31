@@ -11,7 +11,12 @@
 # 3. 点击 Source，或按 Ctrl + Shift + Enter 一键运行。
 # ============================================================
 
-rm(list = ls())
+# Do not clear the whole workspace here. In RStudio Server/bastion workflows,
+# the uploaded dataset is often already loaded in the Global Environment.
+# Clearing everything would remove objects such as `合并数据`.
+DATA_OBJECT_CANDIDATES <- c("合并数据", "合并数据64114_去重后", "data")
+keep_data_objects <- intersect(DATA_OBJECT_CANDIDATES, ls(envir = .GlobalEnv))
+rm(list = setdiff(ls(envir = .GlobalEnv), keep_data_objects), envir = .GlobalEnv)
 options(stringsAsFactors = FALSE)
 set.seed(20260531)
 
@@ -64,7 +69,7 @@ install_and_load(packages)
 # ---------------------- 2. 读取数据 --------------------------
 
 get_raw_data <- function() {
-  candidate_objects <- c("合并数据", "合并数据64114_去重后", "data")
+  candidate_objects <- DATA_OBJECT_CANDIDATES
   for (nm in candidate_objects) {
     if (exists(nm, envir = .GlobalEnv, inherits = FALSE)) {
       obj <- get(nm, envir = .GlobalEnv)
@@ -922,4 +927,3 @@ print(primary_12m$nira$alleviating |>
         dplyr::select(abbr, label_en, nira_effect,
                       physical_fatigue_effect, mental_fatigue_effect,
                       total_fatigue_effect))
-
