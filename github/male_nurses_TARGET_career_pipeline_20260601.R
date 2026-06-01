@@ -1057,8 +1057,9 @@ write_csv(forest, file.path(tables_dir, "Figure_forest_high_turnover_data.csv"))
 if (requireNamespace("ggplot2", quietly = TRUE) && nrow(forest) > 0) {
   p <- ggplot2::ggplot(forest, ggplot2::aes(x = OR, y = Variable)) +
     ggplot2::geom_vline(xintercept = 1, linetype = 2, color = "grey45") +
-    ggplot2::geom_errorbarh(ggplot2::aes(xmin = CI_low, xmax = CI_high),
-                            height = 0.18, linewidth = 0.5, color = "grey30") +
+    ggplot2::geom_errorbar(ggplot2::aes(xmin = CI_low, xmax = CI_high),
+                           orientation = "y", width = 0.18,
+                           linewidth = 0.5, color = "grey30") +
     ggplot2::geom_point(size = 2.3, color = "black") +
     ggplot2::scale_x_log10() +
     ggplot2::labs(
