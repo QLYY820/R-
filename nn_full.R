@@ -15,10 +15,11 @@ Sys.setenv(
   SOMATIC_BOOT_N = "200",
   SOMATIC_RUN_CASE_STABILITY = "1",
   SOMATIC_BOOT_CASE_N = "100",
-  SOMATIC_BOOT_SEED = "20260601"
+  SOMATIC_BOOT_SEED = "20260601",
+  SOMATIC_PREFER_OBJECT = "1"
 )
 
-u <- "https://raw.githubusercontent.com/QLYY820/R-/net/outputs/somatic_exhaustion_network/bastion_reproduce_somatic_exhaustion_network.R?v=20260601_bridge_boot_cs"
+u <- "https://raw.githubusercontent.com/QLYY820/R-/net/outputs/somatic_exhaustion_network/bastion_reproduce_somatic_exhaustion_network.R?v=20260601_object_bridge_boot_cs"
 f <- "nurse_network_full_bootstrap_cs.R"
 download.file(u, f, mode = "wb")
 source(f, encoding = "UTF-8")

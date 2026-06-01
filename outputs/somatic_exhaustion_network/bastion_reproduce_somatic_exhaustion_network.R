@@ -14,7 +14,7 @@
 # Do not clear the whole workspace here. In RStudio Server/bastion workflows,
 # the uploaded dataset is often already loaded in the Global Environment.
 # Clearing everything would remove objects such as `合并数据`.
-DATA_OBJECT_CANDIDATES <- c("合并数据", "合并数据64114_去重后", "data")
+DATA_OBJECT_CANDIDATES <- c("合并数据", "合并数据64114_去重后", "合并数据64114_去重后_", "data")
 keep_data_objects <- intersect(DATA_OBJECT_CANDIDATES, ls(envir = .GlobalEnv))
 rm(list = setdiff(ls(envir = .GlobalEnv), c(keep_data_objects, "DATA_OBJECT_CANDIDATES")),
    envir = .GlobalEnv)
@@ -100,22 +100,41 @@ get_raw_data <- function() {
     "合并数据.xlsx",
     "护士队列_data.xlsx"
   )
-  for (fp in candidate_files) {
-    if (file.exists(fp)) {
-      message("读取当前目录文件：", fp)
-      return(as.data.frame(readxl::read_excel(fp, .name_repair = "unique")))
-    }
-  }
 
-  candidate_objects <- DATA_OBJECT_CANDIDATES
-  for (nm in candidate_objects) {
-    if (exists(nm, envir = .GlobalEnv, inherits = FALSE)) {
-      obj <- get(nm, envir = .GlobalEnv)
-      if (is.data.frame(obj)) {
-        message("使用环境中的数据对象：", nm)
-        return(as.data.frame(obj))
+  read_candidate_object <- function() {
+    for (nm in DATA_OBJECT_CANDIDATES) {
+      if (exists(nm, envir = .GlobalEnv, inherits = FALSE)) {
+        obj <- get(nm, envir = .GlobalEnv)
+        if (is.data.frame(obj)) {
+          message("使用环境中的数据对象：", nm)
+          return(as.data.frame(obj))
+        }
       }
     }
+    NULL
+  }
+
+  read_candidate_file <- function() {
+    for (fp in candidate_files) {
+      if (file.exists(fp)) {
+        message("读取当前目录文件：", fp)
+        return(as.data.frame(readxl::read_excel(fp, .name_repair = "unique")))
+      }
+    }
+    NULL
+  }
+
+  prefer_object <- env_flag("SOMATIC_PREFER_OBJECT", FALSE)
+  if (prefer_object) {
+    raw_obj <- read_candidate_object()
+    if (!is.null(raw_obj)) return(raw_obj)
+    raw_file <- read_candidate_file()
+    if (!is.null(raw_file)) return(raw_file)
+  } else {
+    raw_file <- read_candidate_file()
+    if (!is.null(raw_file)) return(raw_file)
+    raw_obj <- read_candidate_object()
+    if (!is.null(raw_obj)) return(raw_obj)
   }
 
   stop(
