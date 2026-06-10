@@ -112,7 +112,11 @@ read_input_data <- function() {
 
 write_utf8_csv <- function(x, filename) {
   path <- file.path(output_dir, filename)
+  if (is.null(x)) {
+    x <- data.frame(note = "No rows were produced for this table.", stringsAsFactors = FALSE)
+  }
   write.csv(x, path, row.names = FALSE, fileEncoding = "UTF-8")
+  message("Saved: ", normalizePath(path, winslash = "/", mustWork = FALSE))
   path
 }
 
@@ -120,6 +124,28 @@ write_text <- function(lines, filename) {
   path <- file.path(output_dir, filename)
   writeLines(lines, path, useBytes = TRUE)
   path
+}
+
+empty_table <- function(...) {
+  data.frame(..., stringsAsFactors = FALSE)[0, , drop = FALSE]
+}
+
+safe_rbind <- function(rows, template) {
+  if (length(rows) == 0) return(template)
+  do.call(rbind, rows)
+}
+
+safe_step <- function(label, expr, fallback = NULL) {
+  message("Starting: ", label)
+  out <- tryCatch(
+    expr,
+    error = function(e) {
+      message("WARNING: ", label, " failed: ", conditionMessage(e))
+      fallback
+    }
+  )
+  message("Finished: ", label)
+  out
 }
 
 clean_missing <- function(x) {
@@ -494,7 +520,16 @@ continuous_by_class <- function(df, vars) {
       idx <- idx + 1
     }
   }
-  do.call(rbind, rows)
+  safe_rbind(rows, empty_table(
+    variable = character(),
+    latent_class = character(),
+    n = integer(),
+    mean = numeric(),
+    sd = numeric(),
+    median = numeric(),
+    q1 = numeric(),
+    q3 = numeric()
+  ))
 }
 
 categorical_by_class <- function(df, vars) {
@@ -521,7 +556,13 @@ categorical_by_class <- function(df, vars) {
       }
     }
   }
-  do.call(rbind, rows)
+  safe_rbind(rows, empty_table(
+    variable = character(),
+    latent_class = character(),
+    level = character(),
+    n = integer(),
+    percent = numeric()
+  ))
 }
 
 overall_site_prevalence <- function(df) {
@@ -617,7 +658,17 @@ pairwise_logistic <- function(df, ref_class = levels(df$latent_class)[1]) {
       idx <- idx + 1
     }
   }
-  do.call(rbind, rows)
+  safe_rbind(rows, empty_table(
+    comparison = character(),
+    variable = character(),
+    n = integer(),
+    OR = numeric(),
+    CI_low = numeric(),
+    CI_high = numeric(),
+    p_value = numeric(),
+    p_display = character(),
+    note = character()
+  ))
 }
 
 cronbach_alpha <- function(items) {
@@ -799,9 +850,15 @@ run_all <- function() {
   clean <- prep$clean
   raw_clean <- prep$raw_clean
   message("Final clean rows: ", nrow(clean))
+  write_utf8_csv(prep$exclusions, "exclusions.csv")
+  write_utf8_csv(clean, "analysis_clean.csv")
 
   lca <- run_lca(clean)
   clean_with_classes <- lca$clean
+  write_utf8_csv(clean_with_classes, "analysis_clean_with_classes.csv")
+  write_utf8_csv(lca$fit_table, "lca_fit.csv")
+  write_utf8_csv(lca$prob_table, "class_probabilities.csv")
+  write_utf8_csv(lca$class_distribution, "class_distribution.csv")
 
   cont_vars <- c("age", "work_years", "bmi", "psqi_total", "ess_total", "swsd_score",
                  "sps6_total", "pss_total", "phq9_total", "gad7_total",
@@ -811,19 +868,28 @@ run_all <- function() {
                 "occupational_exposure_any", "blood_body_fluid_any",
                 "psqi_poor_sleep", "phq9_depression_risk")
 
-  site_prev <- overall_site_prevalence(clean_with_classes)
-  table1_cont <- continuous_by_class(clean_with_classes, cont_vars)
-  table1_cat <- categorical_by_class(clean_with_classes, cat_vars)
-  logit_table <- pairwise_logistic(clean_with_classes, lca$labels[1])
-  alpha_table <- compute_alpha_table(raw_clean, clean_with_classes)
+  site_prev <- safe_step("overall site prevalence", overall_site_prevalence(clean_with_classes))
+  table1_cont <- safe_step("Table 1 continuous variables", continuous_by_class(clean_with_classes, cont_vars))
+  table1_cat <- safe_step("Table 1 categorical variables", categorical_by_class(clean_with_classes, cat_vars))
+  logit_table <- safe_step("pairwise logistic models", pairwise_logistic(clean_with_classes, lca$labels[1]),
+                           fallback = empty_table(
+                             comparison = character(), variable = character(), n = integer(),
+                             OR = numeric(), CI_low = numeric(), CI_high = numeric(),
+                             p_value = numeric(), p_display = character(), note = character()
+                           ))
+  alpha_table <- safe_step("Cronbach alpha/KR-20", compute_alpha_table(raw_clean, clean_with_classes),
+                           fallback = empty_table(
+                             scale = character(), items = integer(), complete_case_n = integer(),
+                             cronbach_alpha = numeric(), interpretation = character()
+                           ))
 
   output_paths <- c(
-    write_utf8_csv(prep$exclusions, "exclusions.csv"),
-    write_utf8_csv(clean, "analysis_clean.csv"),
-    write_utf8_csv(clean_with_classes, "analysis_clean_with_classes.csv"),
-    write_utf8_csv(lca$fit_table, "lca_fit.csv"),
-    write_utf8_csv(lca$prob_table, "class_probabilities.csv"),
-    write_utf8_csv(lca$class_distribution, "class_distribution.csv"),
+    file.path(output_dir, "exclusions.csv"),
+    file.path(output_dir, "analysis_clean.csv"),
+    file.path(output_dir, "analysis_clean_with_classes.csv"),
+    file.path(output_dir, "lca_fit.csv"),
+    file.path(output_dir, "class_probabilities.csv"),
+    file.path(output_dir, "class_distribution.csv"),
     write_utf8_csv(site_prev, "overall_site_prevalence.csv"),
     write_utf8_csv(table1_cont, "table1_continuous_by_class.csv"),
     write_utf8_csv(table1_cat, "table1_categorical_by_class.csv"),
@@ -832,7 +898,7 @@ run_all <- function() {
   )
 
   if (MAKE_FIGURES) {
-    make_figures(lca$class_distribution, lca$prob_table, lca$fit_table, logit_table)
+    safe_step("figures", make_figures(lca$class_distribution, lca$prob_table, lca$fit_table, logit_table))
   }
 
   summary_lines <- c(
@@ -853,7 +919,11 @@ run_all <- function() {
           sep = ": "),
     "",
     "Cronbach alpha / KR-20:",
-    paste(alpha_table$scale, sprintf("%.3f", alpha_table$cronbach_alpha), sep = ": ")
+    if (nrow(alpha_table) == 0) {
+      "Alpha table was not produced."
+    } else {
+      paste(alpha_table$scale, sprintf("%.3f", alpha_table$cronbach_alpha), sep = ": ")
+    }
   )
   write_text(summary_lines, "run_summary.txt")
 
