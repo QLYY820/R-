@@ -13,7 +13,7 @@ DEFAULT_CSV <- file.path("analysis_outputs", "late_career_turnover_cleaned", "01
 DEFAULT_XLSX <- "data.xlsx"
 DEFAULT_OUT_DIR <- file.path("analysis_outputs", "head_nurse_propensity_health_20260601")
 
-required_packages <- c("data.table", "dplyr", "survey", "broom", "ggplot2", "readxl", "officer", "flextable")
+required_packages <- c("data.table", "dplyr", "survey", "ggplot2")
 missing_packages <- setdiff(required_packages, rownames(installed.packages()))
 if (length(missing_packages) > 0 && isTRUE(INSTALL_MISSING)) {
   user_lib <- Sys.getenv("R_LIBS_USER", unset = "")
@@ -39,11 +39,7 @@ suppressPackageStartupMessages({
   library(data.table)
   library(dplyr)
   library(survey)
-  library(broom)
   library(ggplot2)
-  library(readxl)
-  library(officer)
-  library(flextable)
 })
 
 parse_args <- function(args) {
@@ -1679,10 +1675,37 @@ convert_docx_to_pdf <- function(docx_path, tag) {
   NA_character_
 }
 
-main_docx_path <- build_main_docx()
-supp_docx_path <- build_supplement_docx()
-main_pdf_path <- convert_docx_to_pdf(main_docx_path, "main_docx")
-supp_pdf_path <- convert_docx_to_pdf(supp_docx_path, "supplement_docx")
+skip_word_outputs <- toupper(Sys.getenv("HEAD_NURSE_SKIP_WORD", unset = "TRUE")) %in%
+  c("TRUE", "T", "1", "YES", "Y")
+optional_docx_packages <- c("officer", "flextable")
+missing_docx_packages <- optional_docx_packages[
+  !vapply(optional_docx_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (skip_word_outputs) {
+  main_docx_path <- NA_character_
+  supp_docx_path <- NA_character_
+  main_pdf_path <- NA_character_
+  supp_pdf_path <- NA_character_
+  log_msg(
+    "Skipped R-generated DOCX/PDF outputs because HEAD_NURSE_SKIP_WORD=TRUE. ",
+    "Core CSV/PNG/statistical outputs were saved."
+  )
+} else if (length(missing_docx_packages) == 0) {
+  main_docx_path <- build_main_docx()
+  supp_docx_path <- build_supplement_docx()
+  main_pdf_path <- convert_docx_to_pdf(main_docx_path, "main_docx")
+  supp_pdf_path <- convert_docx_to_pdf(supp_docx_path, "supplement_docx")
+} else {
+  main_docx_path <- NA_character_
+  supp_docx_path <- NA_character_
+  main_pdf_path <- NA_character_
+  supp_pdf_path <- NA_character_
+  log_msg(
+    "Skipped R-generated DOCX/PDF outputs because optional packages are missing: ",
+    paste(missing_docx_packages, collapse = ", "),
+    ". Core CSV/PNG/statistical outputs were still saved."
+  )
+}
 
 writeLines(log_lines, file.path(out_dir, "analysis_run_log.txt"), useBytes = TRUE)
 log_msg("Saved outputs to: ", normalizePath(out_dir, winslash = "/", mustWork = FALSE))

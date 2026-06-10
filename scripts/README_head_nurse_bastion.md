@@ -27,10 +27,13 @@ If the bastion RStudio can access GitHub, the same entry script can be run direc
 source("https://raw.githubusercontent.com/QLYY820/R-/codex/msk-lca-rstudio-bastion-20260602/scripts/run_head_nurse_final_bastion_analysis.R", encoding = "UTF-8")
 ```
 
-The entry script automatically tries to install missing R packages from CRAN. If package installation is blocked, install the missing packages manually first:
+The entry script automatically tries to install missing core R packages from CRAN. Word manuscript generation is skipped by default on the bastion server (`HEAD_NURSE_SKIP_WORD=TRUE`). The script will complete the core analysis and save CSV tables, PNG figures, cleaning rules, and the run log.
+
+After moving the statistical output folder back to a local computer, Word files can be regenerated locally. If the server can compile document packages and you explicitly want Word output on the bastion server, run:
 
 ```r
-install.packages(c("broom", "officer", "flextable"), repos = "https://cloud.r-project.org")
+Sys.setenv(HEAD_NURSE_SKIP_WORD = "FALSE")
+install.packages(c("ragg", "officer", "flextable"), repos = "https://cloud.r-project.org")
 ```
 
 ## Custom output folder

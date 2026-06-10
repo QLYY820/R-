@@ -42,6 +42,9 @@ if (!nzchar(Sys.getenv("HEAD_NURSE_MAIN_DOCX_NAME", unset = ""))) {
 if (!nzchar(Sys.getenv("HEAD_NURSE_INSTALL_MISSING", unset = ""))) {
   Sys.setenv(HEAD_NURSE_INSTALL_MISSING = "TRUE")
 }
+if (!nzchar(Sys.getenv("HEAD_NURSE_SKIP_WORD", unset = ""))) {
+  Sys.setenv(HEAD_NURSE_SKIP_WORD = "TRUE")
+}
 Sys.setenv(
   NURSE_OUTPUT_DIR = out_dir,
   HEAD_NURSE_BASE_DIR = out_dir
@@ -116,15 +119,43 @@ if (length(missing_core_outputs) > 0) {
   )
 }
 
-source_script("build_head_nurse_baseline_cross_sectional_manuscript_formatted.R")
-source_script("build_head_nurse_supplementary_material_final.R")
+skip_word_outputs <- toupper(Sys.getenv("HEAD_NURSE_SKIP_WORD", unset = "TRUE")) %in%
+  c("TRUE", "T", "1", "YES", "Y")
+optional_docx_packages <- c("officer", "flextable")
+missing_docx_packages <- optional_docx_packages[
+  !vapply(optional_docx_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (!skip_word_outputs && length(missing_docx_packages) == 0) {
+  source_script("build_head_nurse_baseline_cross_sectional_manuscript_formatted.R")
+  source_script("build_head_nurse_supplementary_material_final.R")
+} else if (skip_word_outputs) {
+  message(
+    "Skipping formatted Word manuscript/supplement because HEAD_NURSE_SKIP_WORD=TRUE. ",
+    "The statistical CSV tables, PNG figures, cleaning rules, and run log are available in the output directory."
+  )
+} else {
+  message(
+    "Skipping formatted Word manuscript/supplement because optional packages are missing: ",
+    paste(missing_docx_packages, collapse = ", "),
+    ". The statistical CSV tables, PNG figures, cleaning rules, and run log are available in the output directory."
+  )
+}
 
-final_files <- c(
-  file.path(out_dir, Sys.getenv("HEAD_NURSE_MAIN_DOCX_NAME")),
-  file.path(out_dir, "head_nurse_occupational_health_supplementary_material.docx"),
+final_files <- unique(c(
   file.path(out_dir, "00_cleaning_rules.md"),
-  file.path(out_dir, "analysis_run_log.txt")
-)
+  file.path(out_dir, "analysis_run_log.txt"),
+  file.path(out_dir, "03c_baseline_table1_journal.csv"),
+  file.path(out_dir, "07_outcome_models_att.csv"),
+  file.path(out_dir, "08_risk_transition_summary.csv"),
+  if (!skip_word_outputs && length(missing_docx_packages) == 0) {
+    c(
+      file.path(out_dir, Sys.getenv("HEAD_NURSE_MAIN_DOCX_NAME")),
+      file.path(out_dir, "head_nurse_occupational_health_supplementary_material.docx")
+    )
+  } else {
+    character(0)
+  }
+))
 
 message("")
 message("Final head-nurse analysis completed.")
