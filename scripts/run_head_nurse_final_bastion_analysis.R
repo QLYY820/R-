@@ -39,6 +39,9 @@ if (!nzchar(Sys.getenv("HEAD_NURSE_MAIN_DOCX_NAME", unset = ""))) {
       "head_nurse_occupational_health_baseline_cross_sectional_manuscript.docx"
   )
 }
+if (!nzchar(Sys.getenv("HEAD_NURSE_INSTALL_MISSING", unset = ""))) {
+  Sys.setenv(HEAD_NURSE_INSTALL_MISSING = "TRUE")
+}
 Sys.setenv(
   NURSE_OUTPUT_DIR = out_dir,
   HEAD_NURSE_BASE_DIR = out_dir

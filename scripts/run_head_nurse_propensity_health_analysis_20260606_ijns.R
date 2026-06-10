@@ -4,7 +4,10 @@ set.seed(20260601)
 # Head nurse vs staff nurse occupational-health analysis.
 # This script is intentionally standalone and does not overwrite older R scripts.
 
-INSTALL_MISSING <- FALSE
+env_install_missing <- toupper(Sys.getenv("HEAD_NURSE_INSTALL_MISSING", unset = "FALSE"))
+global_install_missing <- exists("INSTALL_MISSING", envir = .GlobalEnv, inherits = FALSE) &&
+  isTRUE(get("INSTALL_MISSING", envir = .GlobalEnv))
+INSTALL_MISSING <- global_install_missing || env_install_missing %in% c("TRUE", "T", "1", "YES", "Y")
 DATA_OBJECT_CANDIDATES <- c("合并数据64114_去重后", "合并数据", "data", "raw_data", "dat")
 DEFAULT_CSV <- file.path("analysis_outputs", "late_career_turnover_cleaned", "01_selected_columns.csv")
 DEFAULT_XLSX <- "data.xlsx"
@@ -13,13 +16,21 @@ DEFAULT_OUT_DIR <- file.path("analysis_outputs", "head_nurse_propensity_health_2
 required_packages <- c("data.table", "dplyr", "survey", "broom", "ggplot2", "readxl", "officer", "flextable")
 missing_packages <- setdiff(required_packages, rownames(installed.packages()))
 if (length(missing_packages) > 0 && isTRUE(INSTALL_MISSING)) {
+  user_lib <- Sys.getenv("R_LIBS_USER", unset = "")
+  if (nzchar(user_lib)) {
+    dir.create(user_lib, recursive = TRUE, showWarnings = FALSE)
+    .libPaths(unique(c(user_lib, .libPaths())))
+  }
+  message("Installing missing packages: ", paste(missing_packages, collapse = ", "))
   install.packages(missing_packages, repos = "https://cloud.r-project.org")
 }
 still_missing <- setdiff(required_packages, rownames(installed.packages()))
 if (length(still_missing) > 0) {
   stop(
     "Missing required packages: ", paste(still_missing, collapse = ", "),
-    ". Install them or set INSTALL_MISSING <- TRUE if internet access is available.",
+    ". Run install.packages(c(",
+    paste(sprintf('\"%s\"', still_missing), collapse = ", "),
+    "), repos = \"https://cloud.r-project.org\") or set Sys.setenv(HEAD_NURSE_INSTALL_MISSING = \"TRUE\") before sourcing the script.",
     call. = FALSE
   )
 }

@@ -27,6 +27,12 @@ If the bastion RStudio can access GitHub, the same entry script can be run direc
 source("https://raw.githubusercontent.com/QLYY820/R-/codex/msk-lca-rstudio-bastion-20260602/scripts/run_head_nurse_final_bastion_analysis.R", encoding = "UTF-8")
 ```
 
+The entry script automatically tries to install missing R packages from CRAN. If package installation is blocked, install the missing packages manually first:
+
+```r
+install.packages(c("broom", "officer", "flextable"), repos = "https://cloud.r-project.org")
+```
+
 ## Custom output folder
 
 ```r
