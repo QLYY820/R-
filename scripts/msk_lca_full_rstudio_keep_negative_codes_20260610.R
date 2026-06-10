@@ -23,6 +23,7 @@ if (!exists("RANDOM_SEED")) RANDOM_SEED <- 20260601
 if (!exists("MAKE_FIGURES")) MAKE_FIGURES <- TRUE
 if (!exists("OUTPUT_ROOT")) OUTPUT_ROOT <- file.path(getwd(), "msk_lca_rstudio_outputs")
 if (!exists("NEGATIVE_CODES_AS_MISSING")) NEGATIVE_CODES_AS_MISSING <- FALSE
+if (!exists("CHECKPOINT_LCA_MODELS")) CHECKPOINT_LCA_MODELS <- TRUE
 
 timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 if (!exists("output_dir")) {
@@ -124,6 +125,11 @@ write_text <- function(lines, filename) {
   path <- file.path(output_dir, filename)
   writeLines(lines, path, useBytes = TRUE)
   path
+}
+
+log_msg <- function(...) {
+  message(...)
+  try(flush.console(), silent = TRUE)
 }
 
 empty_table <- function(...) {
@@ -416,6 +422,12 @@ fit_lca <- function(X, k, n_starts = 20, max_iter = 600, tol = 1e-7, seed = 2026
         iter = iter
       )
     }
+    if (start == 1 || start == n_starts || start %% 3 == 0) {
+      log_msg(sprintf(
+        "  class %d start %d/%d done; current best LogLik = %.3f",
+        k, start, n_starts, best$ll
+      ))
+    }
   }
   best
 }
@@ -443,24 +455,36 @@ run_lca <- function(clean) {
   if (any(is.na(X))) stop("LCA columns contain missing values after cleaning.")
 
   fits <- vector("list", LCA_MAX_CLASSES)
+  checkpoint_dir <- file.path(output_dir, "lca_checkpoints")
+  if (CHECKPOINT_LCA_MODELS) {
+    dir.create(checkpoint_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  fit_progress <- data.frame()
   for (k in seq_len(LCA_MAX_CLASSES)) {
     starts <- if (k <= 4) LCA_N_STARTS_SMALL else LCA_N_STARTS_LARGE
-    message(sprintf("Fitting LCA model with %d class(es), starts=%d", k, starts))
+    log_msg(sprintf("Fitting LCA model with %d class(es), starts=%d", k, starts))
     fits[[k]] <- fit_lca(X, k, starts, LCA_MAX_ITER, LCA_TOL, RANDOM_SEED)
-  }
-
-  fit_table <- do.call(rbind, lapply(fits, function(f) {
-    data.frame(
-      classes = f$k,
-      LogLik = f$ll,
-      AIC = f$aic,
-      BIC = f$bic,
-      aBIC = f$abic,
-      Entropy = f$entropy,
-      min_class_proportion = min(f$pi),
+    one_fit <- data.frame(
+      classes = fits[[k]]$k,
+      LogLik = fits[[k]]$ll,
+      AIC = fits[[k]]$aic,
+      BIC = fits[[k]]$bic,
+      aBIC = fits[[k]]$abic,
+      Entropy = fits[[k]]$entropy,
+      min_class_proportion = min(fits[[k]]$pi),
       stringsAsFactors = FALSE
     )
-  }))
+    fit_progress <- rbind(fit_progress, one_fit)
+    if (CHECKPOINT_LCA_MODELS) {
+      saveRDS(fits[[k]], file.path(checkpoint_dir, sprintf("lca_model_%02d_classes.rds", k)))
+      write.csv(fit_progress, file.path(checkpoint_dir, "lca_fit_progress.csv"),
+                row.names = FALSE, fileEncoding = "UTF-8")
+      log_msg(sprintf("Saved LCA checkpoint for %d class(es).", k))
+    }
+    gc()
+  }
+
+  fit_table <- fit_progress
 
   best <- fits[[which.min(fit_table$BIC)]]
   order_idx <- order(rowMeans(best$theta))
