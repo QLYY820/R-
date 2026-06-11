@@ -9,6 +9,10 @@
 #   2. Optional: set output_dir, SURVEY_YEAR, or LCA_N_STARTS_* before sourcing.
 #   3. source("msk_lca_full_rstudio_bastion_20260602.R")
 #
+# If `submittime` is present, the script derives each nurse's survey year from
+# that timestamp. SURVEY_YEAR is only a fallback when no survey-time column is
+# available.
+#
 # If `data` is not available, set INPUT_DATA_PATH to a CSV or RDS file before
 # sourcing this script. Excel reading is intentionally not included so the script
 # can run with base R only.
@@ -173,6 +177,81 @@ to_num <- function(x) {
   suppressWarnings(as.numeric(x))
 }
 
+parse_year_vector <- function(x) {
+  out <- rep(NA_real_, length(x))
+
+  if (inherits(x, "POSIXt") || inherits(x, "Date")) {
+    return(as.numeric(format(x, "%Y")))
+  }
+
+  if (is.factor(x)) x <- as.character(x)
+
+  if (is.numeric(x)) {
+    # Excel date serials are usually around 44,000 for years 2021-2025.
+    is_excel_date <- !is.na(x) & x >= 30000 & x <= 60000
+    if (any(is_excel_date)) {
+      dt <- as.POSIXct(x[is_excel_date] * 86400,
+                       origin = "1899-12-30",
+                       tz = "Asia/Shanghai")
+      out[is_excel_date] <- as.numeric(format(dt, "%Y"))
+    }
+    is_year <- !is.na(x) & x >= 1900 & x <= 2035 & abs(x - round(x)) < 1e-6
+    out[is_year] <- round(x[is_year])
+    return(out)
+  }
+
+  x_chr <- trimws(as.character(x))
+  x_chr[x_chr %in% MISSING_TOKENS] <- NA_character_
+  formats <- c("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+               "%Y/%m/%d", "%Y-%m-%d")
+  for (fmt in formats) {
+    need <- is.na(out) & !is.na(x_chr)
+    if (!any(need)) break
+    parsed <- as.POSIXct(x_chr[need], format = fmt, tz = "Asia/Shanghai")
+    ok <- !is.na(parsed)
+    if (any(ok)) {
+      idx <- which(need)[ok]
+      out[idx] <- as.numeric(format(parsed[ok], "%Y"))
+    }
+  }
+
+  need <- is.na(out) & !is.na(x_chr)
+  if (any(need)) {
+    m <- regexpr("(20[0-3][0-9]|19[0-9]{2})", x_chr[need], perl = TRUE)
+    ok <- m > 0
+    if (any(ok)) {
+      vals <- regmatches(x_chr[need], m)
+      idx <- which(need)[ok]
+      out[idx] <- as.numeric(vals[ok])
+    }
+  }
+  out
+}
+
+derive_survey_year <- function(df) {
+  time_candidates <- c("submittime", "submittime.x", "submittime.y", "A_year_sub")
+  for (col in time_candidates) {
+    if (col %in% names(df)) {
+      y <- parse_year_vector(df[[col]])
+      if (sum(!is.na(y)) > 0) {
+        log_msg(sprintf("Survey year derived from `%s`.", col))
+        log_msg("Survey year distribution:")
+        print(table(y, useNA = "ifany"))
+        return(y)
+      }
+    }
+  }
+  if (length(SURVEY_YEAR) == 1) {
+    log_msg(sprintf("No survey-time column found; using fixed SURVEY_YEAR = %s.", SURVEY_YEAR))
+    return(rep(SURVEY_YEAR, nrow(df)))
+  }
+  if (length(SURVEY_YEAR) == nrow(df)) {
+    log_msg("Using vector SURVEY_YEAR supplied in the R session.")
+    return(as.numeric(SURVEY_YEAR))
+  }
+  stop("Cannot derive survey year. Add `submittime` to data or set SURVEY_YEAR to a single year/vector.")
+}
+
 is_binary01 <- function(x) {
   vals <- sort(unique(x[is.finite(x)]))
   length(vals) > 0 && all(vals %in% c(0, 1))
@@ -242,10 +321,11 @@ prepare_analysis_data <- function(df_raw) {
     df[[col]] <- to_num(df[[col]])
   }
 
+  df$survey_year <- derive_survey_year(df)
   df$birth_year <- df$A_year
   df$work_start_year <- df$work_y
-  df$age <- SURVEY_YEAR - df$birth_year
-  df$work_years <- SURVEY_YEAR - df$work_start_year
+  df$age <- df$survey_year - df$birth_year
+  df$work_years <- df$survey_year - df$work_start_year
   df$bmi <- df$A_q16 / (df$A_q15 / 100)^2
 
   for (raw_col in names(BODY_PARTS)) {
@@ -301,7 +381,7 @@ prepare_analysis_data <- function(df_raw) {
   df$negative_behavior <- df$F_fuxingxingwei_all
 
   analysis_cols <- c(
-    "id", "age", "work_years", "bmi", "sex", "education", "marital",
+    "id", "survey_year", "age", "work_years", "bmi", "sex", "education", "marital",
     "department", "title", "income", "night_shift", "over40h_any",
     "heavy_work_any", "moderate_work_any", "work_physical_activity",
     "occupational_exposure_any", "blood_body_fluid_any",
@@ -325,7 +405,7 @@ prepare_analysis_data <- function(df_raw) {
   # are not used as exclusion criteria because "not applicable" is common among
   # nurses without that exposure.
   core_complete_cols <- c(
-    "age", "work_years", "bmi", "sex", "department", "title",
+    "survey_year", "age", "work_years", "bmi", "sex", "department", "title",
     "night_shift", "over40h_any", "heavy_work_any", "moderate_work_any",
     "work_physical_activity", "occupational_exposure_any", "blood_body_fluid_any",
     "disinfectant_weekly_mean", "anesthetic_gas_weekly", "antineoplastic_weekly",
