@@ -176,14 +176,44 @@ safe_z <- function(x) {
   as.numeric((z - mean(z, na.rm = TRUE)) / s)
 }
 
+extract_year <- function(x) {
+  if (is.null(x)) return(integer(0))
+  if (inherits(x, "Date") || inherits(x, "POSIXt")) {
+    return(as.integer(format(x, "%Y")))
+  }
+
+  z <- trimws(as.character(x))
+  z[z %in% c("", "NA", "N/A", "NULL", "null", "NaN", "nan", "(skip)", "(blank)")] <- NA_character_
+  out <- suppressWarnings(as.integer(substr(z, 1, 4)))
+  out[!(out >= 1900 & out <= 2100)] <- NA_integer_
+
+  idx <- which(is.na(out) & !is.na(z))
+  if (length(idx) > 0) {
+    num <- suppressWarnings(as.numeric(z[idx]))
+    direct_year <- as.integer(num)
+    direct_year[!(direct_year >= 1900 & direct_year <= 2100)] <- NA_integer_
+
+    excel_year <- suppressWarnings(as.integer(format(as.Date(num, origin = "1899-12-30"), "%Y")))
+    excel_year[!(excel_year >= 1900 & excel_year <= 2100)] <- NA_integer_
+
+    posix_year <- suppressWarnings(as.integer(format(as.POSIXct(num, origin = "1970-01-01", tz = "UTC"), "%Y")))
+    posix_year[!(posix_year >= 1900 & posix_year <= 2100)] <- NA_integer_
+
+    parsed <- ifelse(!is.na(direct_year), direct_year, ifelse(!is.na(excel_year), excel_year, posix_year))
+    out[idx] <- parsed
+  }
+
+  out
+}
+
 sex_num <- to_num(get_col("A_q2"))
 age <- to_num(get_col("A_age"))
 birth_year <- to_num(get_col("A_year"))
 age <- ifelse(is.na(age) & !is.na(birth_year), SURVEY_YEAR - birth_year, age)
 
-work_years <- to_num(get_col("A_gongzuoshichang"))
+submit_year <- extract_year(get_col("submittime"))
 work_start_year <- to_num(get_col("work_y"))
-work_years <- ifelse(is.na(work_years) & !is.na(work_start_year), SURVEY_YEAR - work_start_year, work_years)
+work_years <- ifelse(!is.na(submit_year) & !is.na(work_start_year), submit_year - work_start_year, NA_real_)
 
 bmi <- to_num(get_col("A_BMI"))
 height_cm <- to_num(get_col("A_q15"))
@@ -220,6 +250,8 @@ dat <- data.frame(
   id = id_chr,
   head_nurse = ifelse(head_code == 3, 1, ifelse(head_code == 1, 0, NA_real_)),
   admin_position_code = head_code,
+  submit_year = submit_year,
+  work_start_year = work_start_year,
   age = age,
   work_years = work_years,
   bmi = bmi,
@@ -1036,7 +1068,7 @@ cleaning_rules_md <- c(
   "2. A_q12=2,4,5,6,7 and missing administrative-position records are excluded from the main contrast to keep the exposure clinically interpretable.",
   "3. Duplicate participant IDs are excluded after the first record to avoid double-counting the same nurse.",
   paste0("4. Age is taken from A_age when available, otherwise calculated as ", SURVEY_YEAR, " minus A_year; records outside 18-65 years are excluded."),
-  paste0("5. Work tenure is taken from A_gongzuoshichang when available, otherwise calculated as ", SURVEY_YEAR, " minus work_y; records outside 0-50 years or exceeding age minus 16 years are excluded."),
+  "5. Work tenure is calculated as the calendar year extracted from submittime minus work_y; records with missing or implausible work tenure outside 0-50 years, or work tenure exceeding age minus 16 years, are excluded.",
   "6. BMI uses A_BMI when available, otherwise height/weight; implausible BMI values outside 12-60 kg/m2 are set to missing but do not exclude the record.",
   "7. Questionnaire scores outside their possible ranges are set to missing: PSQI 0-21, ESS 0-24, SPS-6 6-30, GAD-7 0-21, PHQ-9 0-27, PSS 0-40, MBI-EE 0-54, MBI-DP 0-30, MBI-PA 0-48, turnover intention 6-24, WFB 14-70.",
   "8. Records with all main outcomes missing after score-range checks are excluded; outcome models then use outcome-specific complete cases.",
