@@ -3,7 +3,8 @@
 # Usage in the bastion RStudio session:
 #   data <- <your final deduplicated data.frame>
 #   BASTION_OUTPUT_DIR <- "nurse_psych_profiles_bastion_output"  # optional
-#   BASTION_RUN_SENSITIVITY <- FALSE                             # optional, TRUE is slower
+#   BASTION_RUN_INTERPRETATION <- TRUE                           # optional
+#   BASTION_RUN_SENSITIVITY <- TRUE                              # optional, TRUE is slower
 #   source("https://raw.githubusercontent.com/<owner>/<repo>/<branch>/scripts/run_bastion_pipeline_from_data.R")
 #
 # This script starts from the in-memory object named `data`.
@@ -517,6 +518,345 @@ bootstrap_metric_ci <- function(y, p, threshold, n_boot = 1000, seed = 20260611)
   data.frame(metric = names(point), estimate = as.numeric(point), ci_lower = ci[, 1], ci_upper = ci[, 2], ci_method = paste0("bootstrap n=", n_boot), stringsAsFactors = FALSE)
 }
 
+make_sparse_matrix <- function(df, preprocess, retained_cols) {
+  mm <- Matrix::sparse.model.matrix(~ . - 1, data = apply_preprocess(df, preprocess))
+  out <- Matrix::Matrix(0, nrow = nrow(mm), ncol = length(retained_cols), sparse = TRUE)
+  colnames(out) <- retained_cols
+  common <- intersect(retained_cols, colnames(mm))
+  if (length(common) > 0) out[, common] <- mm[, common, drop = FALSE]
+  out
+}
+
+feature_coefficients <- function(fit, retained_cols, s = "lambda.1se") {
+  coef_mat <- as.matrix(stats::coef(fit, s = s))
+  beta <- setNames(rep(0, length(retained_cols)), retained_cols)
+  common <- intersect(retained_cols, rownames(coef_mat))
+  beta[common] <- as.numeric(coef_mat[common, 1])
+  beta
+}
+
+make_deciles <- function(p, groups = 10) {
+  n <- length(p)
+  if (n == 0) return(integer())
+  ceiling(rank(p, ties.method = "first") / n * groups)
+}
+
+auc_with_ci <- function(y, p) {
+  y <- as.integer(y)
+  ok <- !is.na(y) & !is.na(p)
+  y <- y[ok]
+  p <- p[ok]
+  if (length(unique(y)) < 2) {
+    return(c(auc = NA_real_, ci_lower = NA_real_, ci_upper = NA_real_))
+  }
+  roc_obj <- pROC::roc(y, p, quiet = TRUE, levels = c(0, 1), direction = "<")
+  ci <- tryCatch(as.numeric(pROC::ci.auc(roc_obj)), error = function(e) c(NA_real_, NA_real_, NA_real_))
+  c(auc = as.numeric(pROC::auc(roc_obj)), ci_lower = ci[1], ci_upper = ci[3])
+}
+
+plot_if_rows <- function(df, path, plot_fun) {
+  if (is.null(df) || nrow(df) == 0) return(invisible(NULL))
+  p <- plot_fun(df)
+  ggplot2::ggsave(path, p, width = 8, height = 6, dpi = 300)
+}
+
+run_model_interpretation <- function(primary, model_df, candidate_vars, output_root) {
+  test_df <- model_df[primary$test_idx, , drop = FALSE]
+  x_test <- make_sparse_matrix(test_df, primary$preprocess, primary$retained_model_columns)
+  beta <- feature_coefficients(primary$fit, primary$retained_model_columns)
+  nz_features <- names(beta)[beta != 0]
+  if (length(nz_features) == 0) {
+    interpretation_note <- data.frame(note = "No non-zero model coefficients.", stringsAsFactors = FALSE)
+    write_workbook(list(note = interpretation_note), file.path(output_root, "results/tables/stage7_model_interpretation.xlsx"))
+    saveRDS(list(note = interpretation_note), file.path(output_root, "data/processed/stage7_model_interpretation_data.rds"))
+    return(interpretation_note)
+  }
+
+  contribution_mat <- sweep(as.matrix(x_test[, nz_features, drop = FALSE]), 2, beta[nz_features], `*`)
+  contribution_summary <- data.frame(
+    feature = colnames(contribution_mat),
+    coefficient = as.numeric(beta[colnames(contribution_mat)]),
+    mean_contribution = colMeans(contribution_mat, na.rm = TRUE),
+    mean_abs_contribution = colMeans(abs(contribution_mat), na.rm = TRUE),
+    sd_contribution = apply(contribution_mat, 2, stats::sd, na.rm = TRUE),
+    raw_predictor = vapply(colnames(contribution_mat), find_raw_predictor, character(1), final_predictors = candidate_vars),
+    explanation_type = "linear predictor contribution: feature value multiplied by LASSO coefficient",
+    stringsAsFactors = FALSE
+  )
+  contribution_summary <- contribution_summary[order(-contribution_summary$mean_abs_contribution, contribution_summary$feature), , drop = FALSE]
+  top20 <- head(contribution_summary, 20)
+
+  baseline_auc <- as.numeric(pROC::auc(pROC::roc(primary$y_test, primary$test_pred, quiet = TRUE, levels = c(0, 1), direction = "<")))
+  perm_features <- head(contribution_summary$feature, as.integer(get0("BASTION_PERMUTATION_NFEATURES", ifnotfound = 30, envir = .GlobalEnv)))
+  set.seed(20260612)
+  permutation_importance <- do.call(rbind, lapply(perm_features, function(feature) {
+    x_perm <- x_test
+    x_perm[, feature] <- sample(x_perm[, feature])
+    p_perm <- as.numeric(stats::predict(primary$fit, newx = x_perm, s = "lambda.1se", type = "response"))
+    auc_perm <- as.numeric(pROC::auc(pROC::roc(primary$y_test, p_perm, quiet = TRUE, levels = c(0, 1), direction = "<")))
+    data.frame(
+      feature = feature,
+      raw_predictor = find_raw_predictor(feature, candidate_vars),
+      baseline_auc = baseline_auc,
+      permuted_auc = auc_perm,
+      auc_drop = baseline_auc - auc_perm,
+      stringsAsFactors = FALSE
+    )
+  }))
+  permutation_importance <- permutation_importance[order(-permutation_importance$auc_drop, permutation_importance$feature), , drop = FALSE]
+
+  risk_df <- data.frame(
+    y = primary$y_test,
+    predicted_risk = primary$test_pred,
+    risk_decile = make_deciles(primary$test_pred, 10),
+    stringsAsFactors = FALSE
+  )
+  risk_decile <- aggregate(cbind(observed = y, predicted = predicted_risk) ~ risk_decile, risk_df, mean)
+  risk_decile$n <- as.integer(table(risk_df$risk_decile)[as.character(risk_decile$risk_decile)])
+  risk_df$risk_group <- ifelse(risk_df$risk_decile <= 5, "Low risk", ifelse(risk_df$risk_decile <= 8, "Intermediate risk", "High risk"))
+  risk_group <- aggregate(cbind(observed = y, predicted = predicted_risk) ~ risk_group, risk_df, mean)
+  risk_group$n <- as.integer(table(risk_df$risk_group)[as.character(risk_group$risk_group)])
+
+  top20$feature <- factor(top20$feature, levels = rev(top20$feature))
+  p_top <- ggplot2::ggplot(top20, ggplot2::aes(feature, mean_abs_contribution, fill = coefficient > 0)) +
+    ggplot2::geom_col(show.legend = FALSE) +
+    ggplot2::coord_flip() +
+    ggplot2::theme_minimal(base_size = 10) +
+    ggplot2::labs(title = "Top 20 Feature Contributions", x = NULL, y = "Mean absolute contribution")
+  ggplot2::ggsave(file.path(output_root, "results/figures/stage7_shap_or_contribution_top20.png"), p_top, width = 8.5, height = 7, dpi = 300)
+
+  bee_features <- as.character(rev(levels(top20$feature)))
+  sample_n <- min(nrow(contribution_mat), as.integer(get0("BASTION_BEESWARM_SAMPLE_N", ifnotfound = 5000, envir = .GlobalEnv)))
+  set.seed(20260612)
+  sample_idx <- sort(sample(seq_len(nrow(contribution_mat)), sample_n))
+  bee_df <- do.call(rbind, lapply(bee_features, function(feature) {
+    data.frame(
+      feature = feature,
+      contribution = contribution_mat[sample_idx, feature],
+      feature_value = as.numeric(x_test[sample_idx, feature]),
+      stringsAsFactors = FALSE
+    )
+  }))
+  bee_df$feature <- factor(bee_df$feature, levels = rev(bee_features))
+  p_bee <- ggplot2::ggplot(bee_df, ggplot2::aes(contribution, feature, color = feature_value)) +
+    ggplot2::geom_point(alpha = 0.35, size = 0.8, position = ggplot2::position_jitter(height = 0.18, width = 0)) +
+    ggplot2::scale_color_gradient2(low = "#2166AC", mid = "#F7F7F7", high = "#B2182B", midpoint = stats::median(bee_df$feature_value, na.rm = TRUE), name = "Feature value") +
+    ggplot2::theme_minimal(base_size = 10) +
+    ggplot2::labs(title = "Feature Contribution Beeswarm", x = "Contribution to linear predictor", y = NULL)
+  ggplot2::ggsave(file.path(output_root, "results/figures/stage7_shap_or_contribution_beeswarm.png"), p_bee, width = 8.5, height = 7, dpi = 300)
+
+  perm_top <- head(permutation_importance, 20)
+  perm_top$feature <- factor(perm_top$feature, levels = rev(perm_top$feature))
+  p_perm <- ggplot2::ggplot(perm_top, ggplot2::aes(feature, auc_drop)) +
+    ggplot2::geom_col(fill = "#0F766E") +
+    ggplot2::coord_flip() +
+    ggplot2::theme_minimal(base_size = 10) +
+    ggplot2::labs(title = "Permutation Importance: Top 20", x = NULL, y = "AUC drop")
+  ggplot2::ggsave(file.path(output_root, "results/figures/stage7_permutation_importance_top20.png"), p_perm, width = 8.5, height = 7, dpi = 300)
+
+  p_dist <- ggplot2::ggplot(risk_df, ggplot2::aes(predicted_risk, fill = factor(y))) +
+    ggplot2::geom_histogram(bins = 50, alpha = 0.70, position = "identity") +
+    ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::labs(title = "Predicted Risk Distribution", x = "Predicted risk", y = "Count", fill = "Observed")
+  ggplot2::ggsave(file.path(output_root, "results/figures/stage7_predicted_risk_distribution.png"), p_dist, width = 8, height = 5.5, dpi = 300)
+
+  p_decile <- ggplot2::ggplot(risk_decile, ggplot2::aes(risk_decile)) +
+    ggplot2::geom_line(ggplot2::aes(y = observed, color = "Observed"), linewidth = 1) +
+    ggplot2::geom_point(ggplot2::aes(y = observed, color = "Observed"), size = 2) +
+    ggplot2::geom_line(ggplot2::aes(y = predicted, color = "Predicted"), linewidth = 1) +
+    ggplot2::geom_point(ggplot2::aes(y = predicted, color = "Predicted"), size = 2) +
+    ggplot2::scale_x_continuous(breaks = 1:10) +
+    ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::labs(title = "Observed vs Predicted Risk by Decile", x = "Risk decile", y = "Risk", color = NULL)
+  ggplot2::ggsave(file.path(output_root, "results/figures/stage7_risk_decile_observed_vs_predicted.png"), p_decile, width = 8, height = 5.5, dpi = 300)
+
+  risk_group$risk_group <- factor(risk_group$risk_group, levels = c("Low risk", "Intermediate risk", "High risk"))
+  p_group <- ggplot2::ggplot(risk_group, ggplot2::aes(risk_group, observed)) +
+    ggplot2::geom_col(fill = "#7C3AED") +
+    ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::labs(title = "Observed High-Risk Rate by Predicted Risk Group", x = NULL, y = "Observed high-risk rate")
+  ggplot2::ggsave(file.path(output_root, "results/figures/stage7_risk_group_observed_rate.png"), p_group, width = 7, height = 5, dpi = 300)
+
+  write_workbook(
+    list(
+      interpretation_note = data.frame(final_model = "strict LASSO logistic", explanation_type = "linear predictor contribution; not model-retrained SHAP", stringsAsFactors = FALSE),
+      contribution_top100 = head(contribution_summary, 100),
+      permutation_importance = permutation_importance,
+      risk_decile_observed_predicted = risk_decile,
+      risk_group_observed_rate = risk_group,
+      final_predictors = data.frame(final_predictor = candidate_vars),
+      retained_model_columns = data.frame(feature = primary$retained_model_columns)
+    ),
+    file.path(output_root, "results/tables/stage7_model_interpretation.xlsx")
+  )
+  saveRDS(
+    list(
+      contribution_summary = contribution_summary,
+      permutation_importance = permutation_importance,
+      risk_decile = risk_decile,
+      risk_group = risk_group,
+      risk_data = risk_df
+    ),
+    file.path(output_root, "data/processed/stage7_model_interpretation_data.rds")
+  )
+  saveRDS(
+    list(
+      contribution_summary = contribution_summary,
+      permutation_importance = permutation_importance,
+      risk_decile = risk_decile,
+      risk_group = risk_group,
+      risk_data = risk_df
+    ),
+    file.path(output_root, "results/models/stage7_model_interpretation_data.rds")
+  )
+  contribution_summary
+}
+
+make_subgroup_frame <- function(test_df) {
+  subgroup_df <- data.frame(row_id_internal = seq_len(nrow(test_df)))
+  if ("age" %in% names(test_df)) {
+    age <- as_num(test_df$age)
+    subgroup_df$age_group <- cut(age, breaks = c(-Inf, 29, 39, 49, Inf), labels = c("<30", "30-39", "40-49", ">=50"), right = TRUE)
+  }
+  if ("BMI" %in% names(test_df)) {
+    bmi <- as_num(test_df$BMI)
+    subgroup_df$BMI_group <- cut(bmi, breaks = c(-Inf, 18.5, 24, 28, Inf), labels = c("<18.5", "18.5-23.9", "24.0-27.9", ">=28.0"), right = FALSE)
+  }
+  raw_names <- names(test_df)
+  pattern_vars <- unique(c(
+    grep("sex|gender|xingbie|A_q2|性别", raw_names, value = TRUE, ignore.case = TRUE),
+    grep("night|shift|yeban|daoban|夜班|倒班", raw_names, value = TRUE, ignore.case = TRUE),
+    grep("dept|department|keshi|title|zhicheng|hospital|grade|医院|科室|职称|等级", raw_names, value = TRUE, ignore.case = TRUE)
+  ))
+  for (v in pattern_vars) {
+    x <- clean_chr(test_df[[v]])
+    n_levels <- length(unique(x[!is.na(x)]))
+    if (n_levels >= 2 && n_levels <= 12) subgroup_df[[v]] <- factor(x)
+  }
+  subgroup_df$row_id_internal <- NULL
+  subgroup_df
+}
+
+run_subgroup_analysis <- function(test_df, y_test, pred_test, threshold) {
+  subgroup_df <- make_subgroup_frame(test_df)
+  rows <- list()
+  for (v in names(subgroup_df)) {
+    x <- subgroup_df[[v]]
+    for (lev in unique(as.character(x[!is.na(x)]))) {
+      idx <- which(as.character(x) == lev)
+      if (length(idx) < 50 || length(unique(y_test[idx])) < 2 || sum(y_test[idx] == 1) < 5) next
+      auc_ci <- auc_with_ci(y_test[idx], pred_test[idx])
+      cls <- classification_metrics(y_test[idx], pred_test[idx], threshold)
+      rows[[length(rows) + 1]] <- data.frame(
+        subgroup_variable = v,
+        subgroup_level = lev,
+        n = length(idx),
+        positives = sum(y_test[idx] == 1),
+        event_rate = mean(y_test[idx] == 1),
+        auc = auc_ci["auc"],
+        auc_ci_lower = auc_ci["ci_lower"],
+        auc_ci_upper = auc_ci["ci_upper"],
+        pr_auc_average_precision = average_precision(y_test[idx], pred_test[idx]),
+        brier = mean((pred_test[idx] - y_test[idx])^2),
+        sensitivity = cls$sensitivity,
+        specificity = cls$specificity,
+        ppv = cls$ppv,
+        npv = cls$npv,
+        f1 = cls$f1,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  if (length(rows) == 0) empty_table("No eligible subgroup strata.") else do.call(rbind, rows)
+}
+
+run_sensitivity_models <- function(model_df, y, candidate_vars, class_burden, performance, primary, output_root) {
+  sensitivity_rows <- list()
+  sensitivity_models <- list()
+  sensitivity_rows[["primary"]] <- cbind(analysis_label = "primary early-identification model", performance[performance$split == "test", ])
+  sensitivity_models[["primary"]] <- list(note = "Main strict model object is saved in stage6_binary_prediction_models.rds.")
+
+  top2_classes <- class_burden$LPA_class[seq_len(min(2, nrow(class_burden)))]
+  alt_y <- ifelse(is.na(model_df$LPA_class), NA_integer_, as.integer(model_df$LPA_class %in% top2_classes))
+  ok <- !is.na(alt_y)
+  if (length(unique(alt_y[ok])) == 2) {
+    fit_alt <- fit_lasso_pipeline(model_df[ok, , drop = FALSE], alt_y[ok], candidate_vars, seed = 20260612)
+    sensitivity_rows[["top2"]] <- cbind(analysis_label = "alternative high-risk definition: top 2 LPA burden classes", fit_alt$performance[fit_alt$performance$split == "test", ])
+    sensitivity_models[["top2_lpa_burden_classes"]] <- fit_alt
+  }
+
+  if ("lpa_burden_score" %in% names(model_df)) {
+    q75 <- as.numeric(stats::quantile(model_df$lpa_burden_score, 0.75, na.rm = TRUE))
+    alt2_y <- ifelse(is.na(model_df$lpa_burden_score), NA_integer_, as.integer(model_df$lpa_burden_score >= q75))
+    ok2 <- !is.na(alt2_y)
+    if (length(unique(alt2_y[ok2])) == 2) {
+      fit_alt2 <- fit_lasso_pipeline(model_df[ok2, , drop = FALSE], alt2_y[ok2], candidate_vars, seed = 20260613)
+      sensitivity_rows[["burden_q75"]] <- cbind(analysis_label = "alternative high-risk definition: lpa_burden_score top quartile", fit_alt2$performance[fit_alt2$performance$split == "test", ])
+      sensitivity_models[["lpa_burden_top_quartile"]] <- fit_alt2
+    }
+  }
+
+  if ("LPA_probability" %in% names(model_df)) {
+    ok_hc <- !is.na(model_df$LPA_probability) & model_df$LPA_probability >= 0.70
+    if (sum(ok_hc) > 100 && length(unique(y[ok_hc])) == 2) {
+      fit_hc <- fit_lasso_pipeline(model_df[ok_hc, , drop = FALSE], y[ok_hc], candidate_vars, seed = 20260614)
+      sensitivity_rows[["high_conf"]] <- cbind(analysis_label = "high-confidence LPA sample: posterior probability >= 0.70", fit_hc$performance[fit_hc$performance$split == "test", ])
+      sensitivity_models[["high_confidence_lpa"]] <- fit_hc
+    }
+  }
+
+  enhanced_vars <- unique(c(candidate_vars, existing(model_df, c("gad7_total", "phq9_total", "psqi_total", "ess_total", "pss_total", "mbi_ee_total", "mbi_dp_total", "mbi_low_pa_total"))))
+  fit_enh <- fit_lasso_pipeline(model_df, y, enhanced_vars, seed = 20260615)
+  sensitivity_rows[["enhanced"]] <- cbind(analysis_label = "enhanced screening model with symptom scores", fit_enh$performance[fit_enh$performance$split == "test", ])
+  sensitivity_models[["enhanced_screening_symptom_scores"]] <- fit_enh
+
+  sensitivity_perf <- do.call(rbind, sensitivity_rows)
+  sensitivity_models$performance <- sensitivity_perf
+  saveRDS(sensitivity_models, file.path(output_root, "results/models/stage8_sensitivity_models.rds"))
+  sensitivity_perf
+}
+
+plot_stage8 <- function(sensitivity_perf, subgroup_metrics, output_root) {
+  sens_test <- sensitivity_perf[sensitivity_perf$split == "test" & !is.na(sensitivity_perf$auc), , drop = FALSE]
+  if (nrow(sens_test) > 0) {
+    sens_test$analysis_label <- factor(sens_test$analysis_label, levels = rev(sens_test$analysis_label))
+    p_auc <- ggplot2::ggplot(sens_test, ggplot2::aes(analysis_label, auc)) +
+      ggplot2::geom_col(fill = "#2563EB") +
+      ggplot2::coord_flip() +
+      ggplot2::theme_minimal(base_size = 10) +
+      ggplot2::labs(title = "Sensitivity Analysis: AUC Comparison", x = NULL, y = "AUC")
+    ggplot2::ggsave(file.path(output_root, "results/figures/stage8_sensitivity_auc_comparison.png"), p_auc, width = 8.5, height = 5.5, dpi = 300)
+
+    p_pr <- ggplot2::ggplot(sens_test, ggplot2::aes(analysis_label, pr_auc_average_precision)) +
+      ggplot2::geom_col(fill = "#0F766E") +
+      ggplot2::coord_flip() +
+      ggplot2::theme_minimal(base_size = 10) +
+      ggplot2::labs(title = "Sensitivity Analysis: PR-AUC Comparison", x = NULL, y = "PR-AUC")
+    ggplot2::ggsave(file.path(output_root, "results/figures/stage8_sensitivity_pr_auc_comparison.png"), p_pr, width = 8.5, height = 5.5, dpi = 300)
+  }
+
+  if (!is.null(subgroup_metrics) && nrow(subgroup_metrics) > 0 && !"note" %in% names(subgroup_metrics)) {
+    sg <- subgroup_metrics[order(subgroup_metrics$auc), , drop = FALSE]
+    sg$label <- paste(sg$subgroup_variable, sg$subgroup_level, sep = ": ")
+    sg$label <- factor(sg$label, levels = sg$label)
+    p_forest <- ggplot2::ggplot(sg, ggplot2::aes(auc, label)) +
+      ggplot2::geom_segment(ggplot2::aes(x = auc_ci_lower, xend = auc_ci_upper, y = label, yend = label), color = "grey55", na.rm = TRUE) +
+      ggplot2::geom_point(color = "#7C3AED", size = 2) +
+      ggplot2::theme_minimal(base_size = 9) +
+      ggplot2::labs(title = "Subgroup AUC", x = "AUC", y = NULL)
+    ggplot2::ggsave(file.path(output_root, "results/figures/stage8_subgroup_auc_forest.png"), p_forest, width = 8.5, height = max(5.5, min(14, 0.22 * nrow(sg) + 2)), dpi = 300)
+
+    ev <- sg[order(-sg$event_rate), , drop = FALSE]
+    ev$label <- factor(ev$label, levels = rev(ev$label))
+    p_event <- ggplot2::ggplot(ev, ggplot2::aes(label, event_rate)) +
+      ggplot2::geom_col(fill = "#DC2626") +
+      ggplot2::coord_flip() +
+      ggplot2::theme_minimal(base_size = 9) +
+      ggplot2::labs(title = "Subgroup Event Rate", x = NULL, y = "Observed high-risk rate")
+    ggplot2::ggsave(file.path(output_root, "results/figures/stage8_subgroup_event_rate.png"), p_event, width = 8.5, height = max(5.5, min(14, 0.22 * nrow(ev) + 2)), dpi = 300)
+  }
+}
+
 log_msg("Bastion pipeline started. Output root:", output_root)
 
 raw_data <- as.data.frame(get("data", envir = .GlobalEnv), stringsAsFactors = FALSE)
@@ -717,6 +1057,7 @@ dat$LPA_probability <- NA_real_
 model_name <- "EEI"
 lpa_models <- list()
 fit_rows <- list()
+set.seed(20260610)
 for (k in 1:7) {
   log_msg("Fitting LPA model:", k, "classes")
   fit_rows[[paste0("k", k)]] <- tryCatch({
@@ -795,10 +1136,12 @@ class_burden <- class_means_z[, c("LPA_class", "n", burden_vars), drop = FALSE]
 class_burden$psychological_burden_z_mean <- rowMeans(class_burden[, burden_vars, drop = FALSE], na.rm = TRUE)
 class_burden <- class_burden[order(-class_burden$psychological_burden_z_mean), ]
 high_risk_lpa_class <- class_burden$LPA_class[1]
+dat$lpa_burden_score <- NA_real_
+dat$lpa_burden_score[complete_idx] <- rowMeans(lpa_z[, burden_vars, drop = FALSE], na.rm = TRUE)
 dat$high_risk_class <- ifelse(is.na(dat$LPA_class), NA_integer_, as.integer(dat$LPA_class == high_risk_lpa_class))
 model_df <- dat[!is.na(dat$high_risk_class), , drop = FALSE]
 y <- as.integer(model_df$high_risk_class)
-non_predictor <- c("id", "LPA_class", "LPA_probability", "LPA_included", "high_risk_class", "binary_prediction_split", "binary_prediction_probability", "binary_prediction_class_youden")
+non_predictor <- c("id", "LPA_class", "LPA_probability", "LPA_included", "lpa_burden_score", "high_risk_class", "binary_prediction_split", "binary_prediction_probability", "binary_prediction_class_youden")
 candidate_all <- setdiff(names(model_df), non_predictor)
 candidate_vars <- candidate_all[vapply(candidate_all, strict_allowed_raw, logical(1))]
 primary <- fit_lasso_pipeline(model_df, y, candidate_vars)
@@ -826,6 +1169,8 @@ model_object <- list(
   high_risk_lpa_class = high_risk_lpa_class,
   class_burden = class_burden,
   lpa_variables = lpa_vars,
+  final_predictors = candidate_vars,
+  feature_names = primary$retained_model_columns,
   performance = performance,
   coefficients = primary$coefficients
 )
@@ -906,39 +1251,71 @@ write_workbook(
   file.path(output_root, "results/tables/stage9_prediction_reporting_extras.xlsx")
 )
 
-run_sensitivity <- isTRUE(get0("BASTION_RUN_SENSITIVITY", ifnotfound = FALSE, envir = .GlobalEnv))
+run_interpretation <- isTRUE(get0("BASTION_RUN_INTERPRETATION", ifnotfound = TRUE, envir = .GlobalEnv))
+if (run_interpretation) {
+  log_msg("Stage 7 model interpretation started.")
+  interpretation_summary <- run_model_interpretation(primary, model_df, candidate_vars, output_root)
+  cat(
+    paste0(
+      "Stage 7 model interpretation finished.\n",
+      "Model type: strict LASSO logistic.\n",
+      "Explanation: linear predictor contribution, not retrained SHAP.\n",
+      "Top contribution rows: ", nrow(interpretation_summary), "\n"
+    ),
+    file = file.path(output_root, "results/logs/07_model_interpretation_shap_log.txt")
+  )
+  log_msg("Stage 7 model interpretation finished.")
+} else {
+  log_msg("Stage 7 model interpretation skipped. Set BASTION_RUN_INTERPRETATION <- TRUE to run it.")
+}
+
+run_sensitivity <- isTRUE(get0("BASTION_RUN_SENSITIVITY", ifnotfound = TRUE, envir = .GlobalEnv))
 if (run_sensitivity) {
-  log_msg("Sensitivity models started. This can take a long time.")
-  sensitivity_rows <- list()
-  sensitivity_rows[["primary"]] <- cbind(analysis_label = "primary early-identification model", performance[performance$split == "test", ])
-  top2_classes <- class_burden$LPA_class[seq_len(min(2, nrow(class_burden)))]
-  alt_y <- ifelse(is.na(model_df$LPA_class), NA_integer_, as.integer(model_df$LPA_class %in% top2_classes))
-  ok <- !is.na(alt_y)
-  if (length(unique(alt_y[ok])) == 2) {
-    fit_alt <- fit_lasso_pipeline(model_df[ok, , drop = FALSE], alt_y[ok], candidate_vars)
-    sensitivity_rows[["top2"]] <- cbind(analysis_label = "alternative high-risk definition: top 2 LPA burden classes", fit_alt$performance[fit_alt$performance$split == "test", ])
-  }
-  if ("LPA_probability" %in% names(model_df)) {
-    ok_hc <- !is.na(model_df$LPA_probability) & model_df$LPA_probability >= 0.70
-    if (sum(ok_hc) > 100 && length(unique(y[ok_hc])) == 2) {
-      fit_hc <- fit_lasso_pipeline(model_df[ok_hc, , drop = FALSE], y[ok_hc], candidate_vars)
-      sensitivity_rows[["high_conf"]] <- cbind(analysis_label = "high-confidence LPA sample: posterior probability >= 0.70", fit_hc$performance[fit_hc$performance$split == "test", ])
-    }
-  }
-  enhanced_vars <- unique(c(candidate_vars, existing(model_df, c("gad7_total", "phq9_total", "psqi_total", "ess_total", "pss_total", "mbi_ee_total", "mbi_dp_total", "mbi_low_pa_total"))))
-  fit_enh <- fit_lasso_pipeline(model_df, y, enhanced_vars)
-  sensitivity_rows[["enhanced"]] <- cbind(analysis_label = "enhanced screening model with symptom scores", fit_enh$performance[fit_enh$performance$split == "test", ])
-  sensitivity_perf <- do.call(rbind, sensitivity_rows)
+  log_msg("Stage 8 sensitivity and subgroup analysis started. This can take a long time.")
+  sensitivity_perf <- run_sensitivity_models(model_df, y, candidate_vars, class_burden, performance, primary, output_root)
+  subgroup_metrics <- run_subgroup_analysis(model_df[primary$test_idx, , drop = FALSE], primary$y_test, primary$test_pred, primary$threshold)
+  plot_stage8(sensitivity_perf, subgroup_metrics, output_root)
+  cat(
+    paste0(
+      "Stage 8 sensitivity and subgroup analysis finished.\n",
+      "Main model remains the strict early-identification model without LPA symptom indicators.\n",
+      "Sensitivity models are secondary checks and do not replace the main model.\n",
+      "Sensitivity rows: ", nrow(sensitivity_perf), "\n",
+      "Subgroup rows: ", nrow(subgroup_metrics), "\n"
+    ),
+    file = file.path(output_root, "results/logs/08_sensitivity_subgroup_analysis_log.txt")
+  )
+  log_msg("Stage 8 sensitivity and subgroup analysis finished.")
 } else {
   sensitivity_perf <- data.frame(
     analysis_label = "sensitivity models not run",
-    note = "Set BASTION_RUN_SENSITIVITY <- TRUE before source() to run additional sensitivity models.",
+    note = "Set BASTION_RUN_SENSITIVITY <- TRUE before source() to run sensitivity/subgroup analyses.",
     stringsAsFactors = FALSE
   )
-  log_msg("Sensitivity models skipped by default. Set BASTION_RUN_SENSITIVITY <- TRUE to run them.")
+  subgroup_metrics <- data.frame(
+    analysis_label = "subgroup analyses not run",
+    note = "Set BASTION_RUN_SENSITIVITY <- TRUE before source() to run sensitivity/subgroup analyses.",
+    stringsAsFactors = FALSE
+  )
+  cat(
+    "Stage 8 sensitivity/subgroup analysis skipped. Set BASTION_RUN_SENSITIVITY <- TRUE to run it.\n",
+    file = file.path(output_root, "results/logs/08_sensitivity_subgroup_analysis_log.txt")
+  )
+  log_msg("Stage 8 sensitivity/subgroup analysis skipped. Set BASTION_RUN_SENSITIVITY <- TRUE to run it.")
 }
 write_workbook(
-  list(sensitivity_performance = sensitivity_perf),
+  list(
+    sensitivity_performance = sensitivity_perf,
+    subgroup_metrics = subgroup_metrics,
+    analysis_note = data.frame(
+      note = c(
+        "Primary model is the strict early-identification LASSO logistic model.",
+        "Sensitivity models and enhanced screening model are secondary analyses only.",
+        "No Word document and no nomogram are generated by this bastion script."
+      ),
+      stringsAsFactors = FALSE
+    )
+  ),
   file.path(output_root, "results/tables/stage8_sensitivity_subgroup_analysis.xlsx")
 )
 
