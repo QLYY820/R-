@@ -1,0 +1,25 @@
+.Rhistory
+.RData
+.Rproj.user/
+renv/library/
+renv/staging/
+
+# Never commit raw or derived study data.
+data/
+raw/
+input/
+inputs/
+outputs/
+analysis_outputs/
+analysis_outputs_*/
+*.xlsx
+*.xls
+*.csv
+*.tsv
+*.rds
+*.RData
+*.sas7bdat
+*.sav
+
+# Allow small documentation CSV examples only if deliberately force-added.
+!examples/*.csv
