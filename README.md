@@ -34,6 +34,25 @@ CRAN mirror or from your institution's offline package repository.
 
 ## Basic Run
 
+### Short RStudio Run
+
+If the full dataset has already been loaded in RStudio as an object named
+`data`, set the working directory to this repository and type only:
+
+```r
+source("go.R")
+```
+
+This runs the full analysis and writes outputs to `analysis_outputs_full`.
+
+Optional short test run:
+
+```r
+boot <- 200; cfa <- FALSE; source("go.R")
+```
+
+### Command-Line Run
+
 From the repository directory:
 
 ```bash
