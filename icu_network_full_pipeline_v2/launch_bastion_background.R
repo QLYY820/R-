@@ -6,8 +6,8 @@ if (!exists("data", envir = .GlobalEnv, inherits = FALSE) ||
   stop("Load the source Excel file into an R object named `data` before starting.")
 }
 
-stable_commit <- "682f8d34978544a8a852855e9f66990996964dac"
-code_root <- path.expand("~/icu_pipeline_background_code_682f8d3")
+stable_commit <- "5b99fdc9fe9650049f8f8a7c014c0e7ed38dfb89"
+code_root <- path.expand("~/icu_pipeline_background_code_5b99fdc")
 zip_file <- tempfile(pattern = "icu_pipeline_", fileext = ".zip")
 dir.create(code_root, recursive = TRUE, showWarnings = FALSE)
 message("Downloading the memory-safe full pipeline...")
@@ -28,9 +28,13 @@ if (!length(project_dir) || is.na(project_dir) || !dir.exists(project_dir)) {
 }
 setwd(project_dir)
 source("install_packages.R")
+source("run_from_R_object.R")
 
 if (!requireNamespace("data.table", quietly = TRUE)) stop("data.table is unavailable.")
-input_data <- data.table::as.data.table(get("data", envir = .GlobalEnv))
+dictionary <- file.path(project_dir, "config", "source_dictionary.csv")
+original_column_count <- ncol(get("data", envir = .GlobalEnv))
+input_data <- .icu_select_analysis_input(get("data", envir = .GlobalEnv), dictionary)
+selected_source_columns <- names(input_data)
 if (!"analysis_id" %in% names(input_data)) {
   input_data[, analysis_id := sprintf("AUTO-%08d", seq_len(.N))]
 }
@@ -43,12 +47,21 @@ if (anyDuplicated(input_data$analysis_id) || anyDuplicated(input_data$participan
 
 timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 runtime_dir <- path.expand(file.path("~/icu_network_runtime", timestamp))
-output_dir <- path.expand("~/ICU_network_REAL_RUN_BACKGROUND_V1")
+output_dir <- path.expand("~/ICU_network_REAL_RUN_BACKGROUND_V2")
 if (dir.exists(output_dir) && length(list.files(output_dir, all.files = TRUE, no.. = TRUE))) {
   stop("Background output directory already exists and is not empty: ", output_dir)
 }
 dir.create(runtime_dir, recursive = TRUE, showWarnings = FALSE)
 input_file <- file.path(runtime_dir, "raw_input.csv")
+selection_file <- file.path(runtime_dir, "INPUT_COLUMN_SELECTION.csv")
+data.table::fwrite(
+  data.table::data.table(
+    source_column_count = original_column_count,
+    selected_source_column_count = length(selected_source_columns),
+    selected_column = selected_source_columns
+  ),
+  selection_file
+)
 message("Writing the durable background input file. This can take several minutes...")
 data.table::fwrite(input_data, input_file)
 rm(input_data)
@@ -57,7 +70,6 @@ invisible(gc())
 
 rscript <- file.path(R.home("bin"), "Rscript")
 pipeline <- file.path(project_dir, "R", "final_analysis_pipeline.R")
-dictionary <- file.path(project_dir, "config", "source_dictionary.csv")
 config <- file.path(project_dir, "config", "analysis_config.yml")
 runner_file <- file.path(runtime_dir, "run_pipeline.sh")
 pid_file <- file.path(runtime_dir, "pipeline.pid")
@@ -88,6 +100,7 @@ shell_lines <- c(
   pipeline_command,
   "status=$?",
   paste("echo $status >", shQuote(status_file)),
+  paste("if [ -d", shQuote(output_dir), "]; then cp", shQuote(selection_file), shQuote(file.path(output_dir, "INPUT_COLUMN_SELECTION.csv")), "; fi"),
   paste("rm -f", shQuote(input_file)),
   "exit $status"
 )
