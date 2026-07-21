@@ -1,6 +1,8 @@
 .icu_pipeline_root <- local({
   source_file <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
-  if (is.null(source_file) || !nzchar(source_file)) getwd() else dirname(normalizePath(source_file))
+  valid_source <- is.character(source_file) && length(source_file) == 1L &&
+    !is.na(source_file) && nzchar(source_file)
+  if (!valid_source) getwd() else dirname(normalizePath(source_file))
 })
 
 .icu_restore_environment <- function(old_environment) {
@@ -82,8 +84,11 @@ run_icu_network_pipeline <- function(
   config = file.path(.icu_pipeline_root, "config", "analysis_config.yml"),
   mode = "real",
   cores = 3L,
-  bootstrap_cores = 2L
+  bootstrap_cores = 2L,
+  release_input_memory = FALSE
 ) {
+  data_expression <- substitute(data)
+  caller_environment <- parent.frame()
   if (!is.data.frame(data)) stop("`data` must be a data.frame or data.table.")
   if (!requireNamespace("data.table", quietly = TRUE)) stop("Install data.table first.")
 
@@ -105,6 +110,16 @@ run_icu_network_pipeline <- function(
   on.exit(unlink(temp_input, force = TRUE), add = TRUE)
   data.table::fwrite(input_data, temp_input)
   rm(input_data)
+  if (isTRUE(release_input_memory)) {
+    if (is.symbol(data_expression)) {
+      data_name <- as.character(data_expression)
+      if (exists(data_name, envir = caller_environment, inherits = FALSE)) {
+        rm(list = data_name, envir = caller_environment)
+      }
+    }
+    rm(data)
+    message("Raw input object released from R memory after the temporary analysis file was written.")
+  }
   invisible(gc())
 
   result <- .icu_launch_pipeline(

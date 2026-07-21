@@ -2,7 +2,9 @@
 
 .icu_installer_file <- local({
   source_file <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
-  if (is.null(source_file) || !nzchar(source_file)) {
+  valid_source <- is.character(source_file) && length(source_file) == 1L &&
+    !is.na(source_file) && nzchar(source_file)
+  if (!valid_source) {
     normalizePath("install_packages.R", mustWork = TRUE)
   } else {
     normalizePath(source_file, mustWork = TRUE)
