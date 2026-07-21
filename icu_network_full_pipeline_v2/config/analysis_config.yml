@@ -1,0 +1,77 @@
+project_mode: real
+watermark_simulation_only: "SIMULATION ONLY—NOT FOR MANUSCRIPT"
+analysis_level: individual
+design: cross_sectional
+survey_weighted: false
+cluster_robust_by_hospital: false
+multilevel_model: false
+region_stratified: false
+unavailable_by_design:
+  - hospital_identifier
+  - region
+  - survey_weight
+seed_master: 20260713
+nodes:
+  expected_count: 62
+  domains: [Anxiety, Depression, Stress, Burnout, Fatigue]
+  ranges:
+    Anxiety: [0, 3]
+    Depression: [0, 3]
+    Stress: [0, 4]
+    Burnout: [0, 6]
+    Fatigue: [0, 1]
+ordinary_inpatient_department_codes: [1, 2, 4, 5, 6]
+icu_department_code: 8
+quality_control:
+  age_range: [18, 70]
+  tenure_range: [0, 55]
+  age_tenure_rule_min_start_age: 15
+  response_duration_lower_quantile: 0.01
+psm_a_covariates: [A_age, A_q2, A_gongzuoshichang, A_q5, A_q11, A_q12]
+psm_b_covariates: [A_age, A_q2, A_gongzuoshichang, A_q5, A_q11, A_q12, C_q1, C_q2, C_q8]
+matching:
+  method: nearest
+  ratio: 1
+  replace: false
+  primary_caliper_sd: 0.20
+  fallback_caliper_sd: 0.10
+  smd_threshold: 0.10
+network:
+  estimator: EBICglasso
+  correlation: spearman
+  gamma: 0.5
+  cor_auto_force_pd: true
+  redundancy_method: EGAnet_UVA_MBR
+  redundancy_cutoff: 0.25
+  legacy_nodes: [ANX4, ANX6, ANX7, BO10, BO13, BO15, BO18, BO19, BO2, BO3, BO8, DEP1, DEP2, DEP4, DEP8, FAT6, FAT8, STR1, STR10, STR2, STR3, STR8]
+nct:
+  paired: false
+  primary_permutations: 5000
+  sensitivity_permutations: 1000
+  repeated_seed_permutations: 1000
+  parallel_cores: 12
+  p_adjust: BH
+downsampling:
+  repetitions: 200
+  seed_start: 20262000
+  nct_seed_count_per_scenario: 20
+  nct_selected_iterations: [1, 11, 21, 31, 41, 51, 61, 71, 81, 91, 101, 111, 121, 131, 141, 151, 161, 171, 181, 191]
+bootstrap:
+  samples: 1000
+  cores: 8
+case_dropping_bridge:
+  proportions: [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.75]
+  repetitions_per_proportion: 100
+  correlation_threshold: 0.70
+  success_probability: 0.95
+  cores: 12
+predictability:
+  method: mixed_categorical_mgm
+  folds: 5
+  ebic_gamma: 0.25
+  seed: 20263001
+figures:
+  raster_dpi: 600
+  formats: [pdf, png, tiff]
+software:
+  r_minimum: "4.4.0"

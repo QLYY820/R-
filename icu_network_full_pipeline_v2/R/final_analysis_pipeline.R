@@ -1,0 +1,47 @@
+#!/usr/bin/env Rscript
+suppressPackageStartupMessages(library(data.table))
+argv<-commandArgs(trailingOnly=TRUE)
+getarg<-function(key){i<-match(key,argv);if(is.na(i)||i==length(argv))stop("Missing argument ",key);argv[i+1L]}
+input<-normalizePath(getarg("--input"),winslash="/",mustWork=TRUE);dictionary<-normalizePath(getarg("--dictionary"),winslash="/",mustWork=TRUE)
+config<-normalizePath(getarg("--config"),winslash="/",mustWork=TRUE);out<-normalizePath(getarg("--output"),winslash="/",mustWork=FALSE);mode<-getarg("--mode")
+if(!mode%in%c("simulation","real"))stop("--mode must be simulation or real")
+script_path<-sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]);code_dir<-dirname(normalizePath(script_path));source(file.path(code_dir,"common.R"))
+if(dir.exists(out)&&length(list.files(out,all.files=TRUE,no..=TRUE))>0L&&!dir.exists(file.path(out,".pipeline_state")))stop("Output directory must be empty for a new run")
+dir.create(out,recursive=TRUE,showWarnings=FALSE);state<-file.path(out,".pipeline_state");dir.create(state,showWarnings=FALSE);logs<-file.path(out,"logs");dir.create(logs,showWarnings=FALSE)
+master<-file.path(logs,"pipeline_master.log");start<-Sys.time();append_log(master,"START V2 full pipeline mode=",mode)
+file.copy(config,file.path(out,"analysis_config_used.yml"),overwrite=TRUE)
+dir.create(file.path(out,"00_code_snapshot"),showWarnings=FALSE);file.copy(list.files(code_dir,pattern="\\.R$",full.names=TRUE),file.path(out,"00_code_snapshot"),overwrite=TRUE)
+dir.create(file.path(out,"00_dictionary_snapshot"),showWarnings=FALSE);file.copy(dictionary,file.path(out,"00_dictionary_snapshot"),overwrite=TRUE)
+rscript<-file.path(R.home("bin"),if(.Platform$OS.type=="windows")"Rscript.exe" else "Rscript")
+cores<-as.integer(Sys.getenv("ICU_PIPELINE_CORES",min(12L,max(1L,parallel::detectCores()-1L))))
+bootstrap_cores<-as.integer(Sys.getenv("ICU_BOOTSTRAP_CORES",min(8L,cores)))
+run_step<-function(id,script,args){marker<-file.path(state,paste0(id,".PASS"));if(file.exists(marker)){append_log(master,"RESUME skip",id);return(invisible())}
+  console<-file.path(logs,paste0(id,"_console.log"));append_log(master,"RUN",id)
+  status<-system2(rscript,args=shQuote(c(file.path(code_dir,script),args)),stdout=console,stderr=console)
+  if(!identical(status,0L))stop("Step failed: ",id,"; see ",console)
+  writeLines(paste(Sys.time(),"PASS"),marker);append_log(master,"PASS",id)}
+
+run_step("01_preparation","01_prepare_scored_eligible.R",c(input,dictionary,file.path(out,"01_preparation"),file.path(logs,"01_preparation.log")))
+run_step("02_descriptive_matching","02_descriptive_psm.R",c(file.path(out,"01_preparation","scored_analysis_data.csv"),file.path(out,"02_descriptive_matching"),file.path(out,"02_descriptive_matching","figures"),mode,file.path(logs,"02_descriptive_matching.log")))
+run_step("03_networks","03_network_models.R",c(file.path(out,"01_preparation","scored_analysis_data.csv"),file.path(out,"02_descriptive_matching"),file.path(out,"03_networks"),file.path(logs,"03_networks.log")))
+
+nct_script<-"04_nct_parallel.R";nct_root<-file.path(out,"04_NCT")
+run_step("04a_NCT_main_PSM_A",nct_script,c(file.path(out,"02_descriptive_matching","PSM_A","matched_data.csv"),file.path(nct_root,"main_PSM_A"),"main_PSM_A_full62","ALL","spearman","0.5","5000",cores,"20260713","TRUE",file.path(logs,"04a_NCT_main.log")))
+run_step("04b_NCT_PSM_B",nct_script,c(file.path(out,"02_descriptive_matching","PSM_B","matched_data.csv"),file.path(nct_root,"sensitivity","PSM_B_full62"),"PSM_B_full62","ALL","spearman","0.5","1000",cores,"20261713","TRUE",file.path(logs,"04b_NCT_PSM_B.log")))
+run_step("04c_NCT_ordinary",nct_script,c(file.path(out,"02_descriptive_matching","PSM_A_ordinary","matched_data.csv"),file.path(nct_root,"sensitivity","Ordinary_PSM_A_full62"),"Ordinary_PSM_A_full62","ALL","spearman","0.5","1000",cores,"20262713","TRUE",file.path(logs,"04c_NCT_ordinary.log")))
+removed<-fread(file.path(out,"03_networks","redundancy_removed_nodes.csv"))$removed_node;reduced<-paste(setdiff(NODE_IDS,removed),collapse=",")
+legacy<-paste(LEGACY22,collapse=",")
+run_step("04d_NCT_reduced",nct_script,c(file.path(out,"02_descriptive_matching","PSM_A","matched_data.csv"),file.path(nct_root,"sensitivity","redundancy_reduced"),"PSM_A_redundancy_reduced",reduced,"spearman","0.5","1000",cores,"20263713","TRUE",file.path(logs,"04d_NCT_reduced.log")))
+run_step("04e_NCT_legacy22",nct_script,c(file.path(out,"02_descriptive_matching","PSM_A","matched_data.csv"),file.path(nct_root,"sensitivity","legacy22"),"PSM_A_legacy22",legacy,"spearman","0.5","1000",cores,"20264713","TRUE",file.path(logs,"04e_NCT_legacy.log")))
+run_step("04f_NCT_cor_auto",nct_script,c(file.path(out,"02_descriptive_matching","PSM_A","matched_data.csv"),file.path(nct_root,"sensitivity","cor_auto_full62"),"PSM_A_cor_auto_full62","ALL","cor_auto","0.5","1000",cores,"20265713","TRUE",file.path(logs,"04f_NCT_cor_auto.log")))
+
+run_step("05_downsampling","05_repeated_downsampling.R",c(file.path(out,"01_preparation","scored_analysis_data.csv"),file.path(out,"02_descriptive_matching","PSM_A","matched_data.csv"),file.path(out,"05_downsampling"),"200",cores,file.path(logs,"05_downsampling.log")))
+run_step("06_repeated_seed_NCT","08_repeated_seed_nct.R",c(file.path(out,"05_downsampling"),file.path(out,"06_repeated_seed_NCT"),"1000",cores,file.path(logs,"06_repeated_seed_NCT.log")))
+run_step("07_bootstrap","06_bootstrap_stability.R",c(file.path(out,"02_descriptive_matching","PSM_A","matched_data.csv"),file.path(out,"02_descriptive_matching","PSM_B","matched_data.csv"),file.path(out,"07_bootstrap"),"1000",bootstrap_cores,file.path(logs,"07_bootstrap.log")))
+run_step("08_predictability","07_mgm_predictability_cv.R",c(file.path(out,"02_descriptive_matching","PSM_A","matched_data.csv"),file.path(out,"08_predictability"),"5","20260713",file.path(logs,"08_predictability.log")))
+run_step("09_figures","09_generate_figures.R",c(file.path(out,"03_networks"),file.path(out,"04_NCT"),file.path(out,"07_bootstrap"),file.path(out,"08_predictability"),file.path(out,"09_figures"),mode,file.path(logs,"09_figures.log")))
+master_lines<-readLines(master,warn=FALSE);stamp_candidates<-substr(master_lines[grepl("START V2 full pipeline",master_lines,fixed=TRUE)],1,19)
+first_start<-if(length(stamp_candidates))min(as.POSIXct(stamp_candidates,format="%Y-%m-%d %H:%M:%S")) else start
+fwrite(data.table(start_time=as.character(first_start),pre_audit_end_time=as.character(Sys.time()),total_runtime_seconds=as.numeric(difftime(Sys.time(),first_start,units="secs"))),file.path(out,"pipeline_runtime.csv"))
+run_step("10_audit_finalize","10_finalize_audit.R",c(out,dirname(code_dir),mode,file.path(logs,"10_audit_finalize.log")))
+append_log(master,"COMPLETE V2 pipeline mode=",mode,"exit status 0")

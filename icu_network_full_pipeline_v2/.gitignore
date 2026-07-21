@@ -1,0 +1,14 @@
+data/
+input/
+output/
+outputs/
+results/
+runs/
+*.RData
+*.Rdata
+*.rds
+*.csv.gz
+*.zip
+*.log
+.Rhistory
+.Rproj.user/
