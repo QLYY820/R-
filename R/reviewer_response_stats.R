@@ -16,9 +16,9 @@ parse_args <- function(args) {
     data = NULL,
     sheet = NULL,
     out = "analysis_outputs_full",
-    bootstrap = 5000,
+    bootstrap = 0,
     min_subgroup_n = 100,
-    run_cfa = TRUE
+    run_cfa = FALSE
   )
   i <- 1
   while (i <= length(args)) {
@@ -50,14 +50,14 @@ parse_args <- function(args) {
 
 print_help <- function() {
   cat("Usage:\n")
-  cat("  Rscript R/reviewer_response_stats.R --data DATAFILE [--sheet SHEET] [--out OUTDIR] [--bootstrap 5000]\n\n")
+  cat("  Rscript R/reviewer_response_stats.R --data DATAFILE [--sheet SHEET] [--out OUTDIR] [--bootstrap 0]\n\n")
   cat("Options:\n")
   cat("  --data            Input .xlsx, .xls, .csv, .tsv, or .rds file.\n")
   cat("  --sheet           Excel sheet name or 1-based index. Defaults to first sheet.\n")
   cat("  --out             Output directory. Defaults to analysis_outputs_full.\n")
-  cat("  --bootstrap       Bootstrap resamples for mediation CIs. Defaults to 5000.\n")
+  cat("  --bootstrap       Bootstrap resamples for mediation CIs. Defaults to 0 for a fast first run.\n")
   cat("  --min_subgroup_n  Minimum rows per subgroup category. Defaults to 100.\n")
-  cat("  --run_cfa         TRUE/FALSE. Defaults to TRUE.\n")
+  cat("  --run_cfa         TRUE/FALSE. Defaults to FALSE for a fast first run.\n")
 }
 
 args <- parse_args(commandArgs(trailingOnly = TRUE))
@@ -140,6 +140,12 @@ write_csv_utf8 <- function(x, file) {
   readr::write_excel_csv(x, file.path(out_dir, file), na = "")
 }
 
+boot_quantile <- function(x, prob) {
+  x <- x[is.finite(x)]
+  if (length(x) == 0) return(NA_real_)
+  unname(stats::quantile(x, prob, na.rm = TRUE))
+}
+
 safe_num <- function(x) {
   if (is.numeric(x)) return(x)
   y <- trimws(as.character(x))
@@ -184,6 +190,7 @@ read_input <- function(path, sheet = NULL) {
 dat <- read_input(input_path, args$sheet)
 names(dat) <- trimws(names(dat))
 dat_raw <- dat
+message(sprintf("Loaded data: %s rows x %s columns", nrow(dat), ncol(dat)))
 
 for (nm in names(dat)) {
   if (!inherits(dat[[nm]], "Date") && !is.numeric(dat[[nm]])) {
@@ -314,6 +321,7 @@ alpha_results <- bind_rows(
   alpha_one("Depression items", vars$depression_items)
 )
 write_csv_utf8(alpha_results, "reliability_alpha.csv")
+message("Finished reliability analysis.")
 
 all_items <- available(c(vars$hrpl_items, vars$fatigue_items, vars$support_items, vars$depression_items))
 item_mat <- dat[, all_items, drop = FALSE]
@@ -340,6 +348,7 @@ if (nrow(item_mat_complete) >= 3 && ncol(item_mat_complete) >= 2) {
   )
 }
 write_csv_utf8(common_method, "common_method_bias_harman.csv")
+message("Finished Harman common-method check.")
 
 make_cfa_model <- function(one_factor = FALSE) {
   hrpl <- available(vars$hrpl_items)
@@ -394,6 +403,7 @@ if (can_cfa) {
 }
 cfa_results <- bind_rows(cfa_rows)
 write_csv_utf8(cfa_results, "common_method_bias_cfa.csv")
+message("Finished CFA step.")
 
 cor_one <- function(x, y, label_x, label_y) {
   d <- data.frame(x = safe_num(dat[[x]]), y = safe_num(dat[[y]]))
@@ -419,6 +429,7 @@ cor_results <- bind_rows(lapply(core_pairs, function(v) cor_one(v[1], v[2], v[3]
 cor_results$p_fdr <- p.adjust(cor_results$p_value, method = "BH")
 cor_results$p_fdr_text <- vapply(cor_results$p_fdr, fmt_p, character(1))
 write_csv_utf8(cor_results, "correlation_core_spearman.csv")
+message("Finished core correlations.")
 
 model_frame_core <- function(extra_cols = character()) {
   cols <- unique(c(required_core, covariates, extra_cols))
@@ -504,7 +515,16 @@ run_mediation <- function() {
   bcoef <- coef(med_y)[["M"]]
   direct <- coef(med_y)[["X"]]
   total <- coef(med_t)[["X"]]
-  boot <- bootstrap_mediation(d, covar_cols, args$bootstrap)
+  boot <- if (args$bootstrap > 0) {
+    bootstrap_mediation(d, covar_cols, args$bootstrap)
+  } else {
+    matrix(NA_real_, nrow = 0, ncol = 5, dimnames = list(NULL, c("a", "b", "indirect", "direct", "total")))
+  }
+  boot_note <- if (args$bootstrap > 0) {
+    sprintf("Bootstrap percentile CI, %d resamples", args$bootstrap)
+  } else {
+    "Bootstrap skipped in fast mode; rerun with boot <- 1000 or 5000 for CI"
+  }
   res <- data.frame(
     effect = c(
       "a: fatigue -> depression",
@@ -518,7 +538,7 @@ run_mediation <- function() {
     ci_low = c(
       confint(med_m)["X", 1],
       confint(med_y)["M", 1],
-      quantile(boot[, "indirect"], .025, na.rm = TRUE),
+      boot_quantile(boot[, "indirect"], .025),
       confint(med_y)["X", 1],
       confint(med_t)["X", 1],
       NA_real_
@@ -526,7 +546,7 @@ run_mediation <- function() {
     ci_high = c(
       confint(med_m)["X", 2],
       confint(med_y)["M", 2],
-      quantile(boot[, "indirect"], .975, na.rm = TRUE),
+      boot_quantile(boot[, "indirect"], .975),
       confint(med_y)["X", 2],
       confint(med_t)["X", 2],
       NA_real_
@@ -540,7 +560,7 @@ run_mediation <- function() {
       NA_real_
     ),
     n = nrow(d),
-    note = c("", "", sprintf("Bootstrap percentile CI, %d resamples", args$bootstrap),
+    note = c("", "", boot_note,
              "", "", "Use cautiously when total effect is small")
   )
   res$p <- vapply(res$p_value, fmt_p, character(1))
@@ -549,6 +569,7 @@ run_mediation <- function() {
 
 mediation_results <- run_mediation()
 write_csv_utf8(mediation_results, "mediation_results.csv")
+message("Finished mediation model.")
 
 prepare_moderated_data <- function(w_col) {
   d <- data.frame(
@@ -623,26 +644,33 @@ fit_moderated_mediation <- function(w_col, w_label) {
   names(inter)[names(inter) == "p.value"] <- "p_value"
 
   w_values <- c(low = -1, mean = 0, high = 1)
-  boot_vals <- matrix(NA_real_, nrow = args$bootstrap, ncol = length(w_values))
+  boot_vals <- matrix(NA_real_, nrow = max(args$bootstrap, 0), ncol = length(w_values))
   colnames(boot_vals) <- names(w_values)
   n <- nrow(d)
-  for (i in seq_len(args$bootstrap)) {
-    idx <- sample.int(n, n, replace = TRUE)
-    bd <- d[idx, , drop = FALSE]
-    bm <- tryCatch(lm(as.formula(paste("Mz ~ Xz * Wz +", cov_rhs)), data = bd), error = function(e) NULL)
-    by <- tryCatch(lm(as.formula(paste("Yz ~ Xz * Wz + Mz * Wz +", cov_rhs)), data = bd), error = function(e) NULL)
-    if (is.null(bm) || is.null(by)) next
-    cm <- coef(bm)
-    cy <- coef(by)
-    a1 <- coef_get(cm, "Xz")
-    a3 <- coef_get(cm, c("Xz:Wz", "Wz:Xz"))
-    b1 <- coef_get(cy, "Mz")
-    b3 <- coef_get(cy, c("Mz:Wz", "Wz:Mz"))
-    if (any(is.na(c(a1, a3, b1, b3)))) next
-    for (nm in names(w_values)) {
-      w <- w_values[[nm]]
-      boot_vals[i, nm] <- (a1 + a3 * w) * (b1 + b3 * w)
+  if (args$bootstrap > 0) {
+    for (i in seq_len(args$bootstrap)) {
+      idx <- sample.int(n, n, replace = TRUE)
+      bd <- d[idx, , drop = FALSE]
+      bm <- tryCatch(lm(as.formula(paste("Mz ~ Xz * Wz +", cov_rhs)), data = bd), error = function(e) NULL)
+      by <- tryCatch(lm(as.formula(paste("Yz ~ Xz * Wz + Mz * Wz +", cov_rhs)), data = bd), error = function(e) NULL)
+      if (is.null(bm) || is.null(by)) next
+      cm <- coef(bm)
+      cy <- coef(by)
+      a1 <- coef_get(cm, "Xz")
+      a3 <- coef_get(cm, c("Xz:Wz", "Wz:Xz"))
+      b1 <- coef_get(cy, "Mz")
+      b3 <- coef_get(cy, c("Mz:Wz", "Wz:Mz"))
+      if (any(is.na(c(a1, a3, b1, b3)))) next
+      for (nm in names(w_values)) {
+        w <- w_values[[nm]]
+        boot_vals[i, nm] <- (a1 + a3 * w) * (b1 + b3 * w)
+      }
     }
+  }
+  cond_note <- if (args$bootstrap > 0) {
+    sprintf("Standardized variables; bootstrap percentile CI, %d resamples", args$bootstrap)
+  } else {
+    "Standardized variables; bootstrap CI skipped in fast mode"
   }
   cm <- coef(m1)
   cy <- coef(y1)
@@ -659,10 +687,10 @@ fit_moderated_mediation <- function(w_col, w_label) {
       social_support_level = nm,
       W_value_z = w,
       conditional_indirect = indirect,
-      ci_low = quantile(boot_vals[, nm], .025, na.rm = TRUE),
-      ci_high = quantile(boot_vals[, nm], .975, na.rm = TRUE),
+      ci_low = boot_quantile(boot_vals[, nm], .025),
+      ci_high = boot_quantile(boot_vals[, nm], .975),
       n = nrow(d),
-      note = sprintf("Standardized variables; bootstrap percentile CI, %d resamples", args$bootstrap)
+      note = cond_note
     )
   }))
 
@@ -695,6 +723,7 @@ fit_moderated_mediation <- function(w_col, w_label) {
 overall_mod <- fit_moderated_mediation(vars$support, "Total social support")
 write_csv_utf8(overall_mod$interactions, "moderated_mediation_interactions.csv")
 write_csv_utf8(overall_mod$conditional, "moderated_mediation_conditional_indirect.csv")
+message("Finished total social-support moderated mediation.")
 
 dimension_specs <- c(
   "Family support" = vars$support_family,
@@ -704,6 +733,7 @@ dimension_specs <- c(
 dimension_runs <- lapply(names(dimension_specs), function(lbl) fit_moderated_mediation(dimension_specs[[lbl]], lbl))
 dimension_interactions <- bind_rows(lapply(dimension_runs, `[[`, "interactions"))
 write_csv_utf8(dimension_interactions, "support_dimension_moderation.csv")
+message("Finished social-support dimension models.")
 
 is_no_binary <- function(binary_col) {
   if (is.null(binary_col) || !exists_col(binary_col)) return(rep(FALSE, nrow(dat)))
@@ -810,6 +840,7 @@ if (nrow(adjusted_bev) > 0) {
   adjusted_bev$p_fdr_text <- vapply(adjusted_bev$p_fdr, fmt_p, character(1))
 }
 write_csv_utf8(adjusted_bev, "beverage_adjusted_models.csv")
+message("Finished beverage analyses.")
 
 subgroup_rows <- list()
 for (sg in available(vars$subgroup_vars)) {
@@ -829,6 +860,7 @@ for (sg in available(vars$subgroup_vars)) {
 }
 subgroup_feas <- bind_rows(subgroup_rows)
 write_csv_utf8(subgroup_feas, "subgroup_feasibility.csv")
+message("Finished subgroup feasibility table.")
 
 subgroup_interactions <- list()
 for (sg in available(vars$subgroup_vars)) {
@@ -875,6 +907,7 @@ for (sg in available(vars$subgroup_vars)) {
   }
 }
 write_csv_utf8(bind_rows(subgroup_interactions), "subgroup_interactions.csv")
+message("Finished subgroup interaction checks.")
 
 sink(file.path(out_dir, "analysis_console_summary.txt"), split = FALSE)
 cat("Reviewer-requested full-data analysis\n")

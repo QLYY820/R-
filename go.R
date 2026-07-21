@@ -4,9 +4,9 @@
 
 run_hrpl_review <- function(dat = get("data", envir = .GlobalEnv),
                             out = "analysis_outputs_full",
-                            bootstrap = 5000,
+                            bootstrap = 0,
                             min_subgroup_n = 100,
-                            run_cfa = TRUE) {
+                            run_cfa = FALSE) {
   if (!is.data.frame(dat) && !is.matrix(dat)) {
     stop("`data` must be a data.frame, tibble, data.table, or matrix-like object.", call. = FALSE)
   }
@@ -18,6 +18,7 @@ run_hrpl_review <- function(dat = get("data", envir = .GlobalEnv),
 
   dir.create(out, showWarnings = FALSE, recursive = TRUE)
   tmp <- tempfile("rstudio_data_", fileext = ".rds")
+  message("Preparing data object for analysis...")
   saveRDS(as.data.frame(dat), tmp)
   on.exit(unlink(tmp), add = TRUE)
 
@@ -51,7 +52,7 @@ if (!exists("data", envir = .GlobalEnv, inherits = FALSE)) {
 boot_value <- if (exists("boot", envir = .GlobalEnv, inherits = FALSE)) {
   get("boot", envir = .GlobalEnv)
 } else {
-  5000
+  0
 }
 
 out_value <- if (exists("out", envir = .GlobalEnv, inherits = FALSE)) {
@@ -63,7 +64,7 @@ out_value <- if (exists("out", envir = .GlobalEnv, inherits = FALSE)) {
 cfa_value <- if (exists("cfa", envir = .GlobalEnv, inherits = FALSE)) {
   get("cfa", envir = .GlobalEnv)
 } else {
-  TRUE
+  FALSE
 }
 
 minn_value <- if (exists("minn", envir = .GlobalEnv, inherits = FALSE)) {

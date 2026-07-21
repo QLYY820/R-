@@ -44,12 +44,16 @@ source("go.R")
 ```
 
 This runs the full analysis and writes outputs to `analysis_outputs_full`.
+By default, this is a fast first run: bootstrap CIs and CFA are skipped so the
+script can finish quickly on the full 48k-row dataset.
 
-Optional short test run:
+Optional slower manuscript run with bootstrap and CFA:
 
 ```r
-boot <- 200; cfa <- FALSE; source("go.R")
+boot <- 1000; cfa <- TRUE; source("go.R")
 ```
+
+Use `boot <- 5000` only when you are ready for a long final run.
 
 ### Command-Line Run
 
