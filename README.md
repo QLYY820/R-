@@ -24,7 +24,7 @@ Install once on the server:
 
 ```r
 install.packages(c(
-  "readxl", "psych", "lavaan", "lm.beta", "ggplot2",
+  "readxl", "lavaan", "ggplot2",
   "dplyr", "broom", "readr"
 ))
 ```

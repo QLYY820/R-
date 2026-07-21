@@ -5,7 +5,7 @@
 # Date: 2026-07-10
 # Random seed: 42
 # R: >= 4.0
-# Key packages: readxl, psych, lavaan, lm.beta, ggplot2, dplyr, broom, readr
+# Key packages: readxl, lavaan, ggplot2, dplyr, broom, readr
 
 set.seed(42)
 
@@ -66,7 +66,7 @@ if (isTRUE(args$help) || is.null(args$data)) {
   quit(status = ifelse(isTRUE(args$help), 0, 1))
 }
 
-required_packages <- c("readxl", "psych", "lavaan", "lm.beta", "ggplot2", "dplyr", "broom", "readr")
+required_packages <- c("readxl", "lavaan", "ggplot2", "dplyr", "broom", "readr")
 missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing_packages) > 0) {
   stop(
@@ -82,9 +82,7 @@ if (length(missing_packages) > 0) {
 
 suppressPackageStartupMessages({
   library(readxl)
-  library(psych)
   library(lavaan)
-  library(lm.beta)
   library(ggplot2)
   library(dplyr)
   library(broom)
@@ -274,6 +272,18 @@ core_vars <- unique(c(
 ))
 write_csv_utf8(missing[missing$variable %in% core_vars, ], "core_variable_overview.csv")
 
+cronbach_alpha <- function(mat) {
+  mat <- as.data.frame(mat)
+  mat[] <- lapply(mat, safe_num)
+  k <- ncol(mat)
+  if (k < 2 || nrow(mat) < 3) return(NA_real_)
+  item_vars <- vapply(mat, stats::var, numeric(1), na.rm = TRUE)
+  total <- rowSums(mat)
+  total_var <- stats::var(total, na.rm = TRUE)
+  if (is.na(total_var) || total_var <= 0) return(NA_real_)
+  k / (k - 1) * (1 - sum(item_vars, na.rm = TRUE) / total_var)
+}
+
 alpha_one <- function(label, cols) {
   cols <- available(cols)
   if (length(cols) < 2) {
@@ -287,12 +297,12 @@ alpha_one <- function(label, cols) {
     return(data.frame(scale = label, items = length(cols), n_complete = nrow(mat),
                       cronbach_alpha = NA_real_, note = "Too few complete rows"))
   }
-  a <- tryCatch(psych::alpha(mat, warnings = FALSE), error = function(e) e)
+  a <- tryCatch(cronbach_alpha(mat), error = function(e) e)
   data.frame(
     scale = label,
     items = length(cols),
     n_complete = nrow(mat),
-    cronbach_alpha = if (inherits(a, "error")) NA_real_ else unname(a$total$raw_alpha),
+    cronbach_alpha = if (inherits(a, "error")) NA_real_ else unname(a),
     note = if (inherits(a, "error")) conditionMessage(a) else ""
   )
 }
