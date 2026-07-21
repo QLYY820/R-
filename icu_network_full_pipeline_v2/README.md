@@ -38,8 +38,8 @@ run_icu_network_pipeline(
   data = data,
   output_dir = "/your/private/path/ICU_network_REAL_RUN",
   mode = "real",
-  cores = 12,
-  bootstrap_cores = 8
+  cores = 3,
+  bootstrap_cores = 2
 )
 ```
 
@@ -49,6 +49,12 @@ any analysis variable. Their provenance is recorded in `INPUT_ID_PROVENANCE.txt`
 
 The output directory must be empty for a new run. Calling the same command with
 the same output directory resumes completed steps using `.pipeline_state` markers.
+After the preparation checkpoint exists, a restarted R session can resume without
+reloading the raw Excel object:
+
+```r
+resume_icu_network_pipeline("~/ICU_network_REAL_RUN", cores = 3, bootstrap_cores = 2)
+```
 
 ## Required input structure
 

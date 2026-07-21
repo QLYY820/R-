@@ -29,7 +29,8 @@ fit_one<-function(i){
     model="Mixed categorical mgm, pairwise interactions, EBIC gamma 0.25, 5-fold cross-validation")]
   folder<-file.path(out,gsub("[^A-Za-z0-9]+","_",label));saveRDS(list(fit=fit,prediction=pred),file.path(folder,sprintf("fold_%02d_model_prediction.rds",k)),compress=TRUE);er
 }
-cl<-makePSOCKcluster(min(10L,nrow(jobs)));on.exit(try(stopCluster(cl),silent=TRUE),add=TRUE)
+mgm_cores<-max(1L,min(as.integer(Sys.getenv("ICU_PIPELINE_CORES","3")),nrow(jobs)))
+cl<-makePSOCKcluster(mgm_cores);on.exit(try(stopCluster(cl),silent=TRUE),add=TRUE)
 clusterEvalQ(cl,{suppressPackageStartupMessages({library(data.table);library(mgm)});NULL})
 clusterExport(cl,c("jobs","group_data","fold_ids","labels","seed","out","fit_one"),envir=environment())
 raw_all<-rbindlist(parLapply(cl,seq_len(nrow(jobs)),fit_one),fill=TRUE);stopCluster(cl)
