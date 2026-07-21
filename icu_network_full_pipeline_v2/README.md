@@ -46,6 +46,11 @@ run_icu_network_pipeline(
 When the source object has no `analysis_id` or `participant_hash`, the wrapper
 automatically creates internal row-order IDs. These technical fields do not alter
 any analysis variable. Their provenance is recorded in `INPUT_ID_PROVENANCE.txt`.
+Before writing the runtime input, the wrapper retains only dictionary-defined
+network items, required stored totals, modeled covariates, response-time columns,
+and optional technical IDs. The selection is recorded in
+`INPUT_COLUMN_SELECTION.csv`; unrelated cohort columns are not copied into the
+analysis pipeline.
 
 The output directory must be empty for a new run. Calling the same command with
 the same output directory resumes completed steps using `.pipeline_state` markers.

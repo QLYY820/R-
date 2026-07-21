@@ -16,6 +16,49 @@
   }
 }
 
+.icu_select_analysis_input <- function(data, dictionary) {
+  if (!requireNamespace("data.table", quietly = TRUE)) stop("Install data.table first.")
+  if (!file.exists(dictionary)) stop("Dictionary not found: ", dictionary)
+  dictionary_table <- data.table::fread(dictionary)
+  if (nrow(dictionary_table) != 62L) stop("Dictionary must contain exactly 62 network items.")
+
+  required_covariates <- c(
+    "A_q2", "A_age", "A_BMI", "A_gongzuoshichang", "A_q5", "A_q9",
+    "A_q11", "A_q12", "C_q1", "C_q2", "C_q8"
+  )
+  required_totals <- c(
+    "D_jiaolv_all", "D_yiyu_all", "D_yali_all", "F_qingganshuaijie",
+    "F_qurengehua", "F_gerenchengjiugan", "G_pifa_all", "G_qutipifa",
+    "G_naolipifa"
+  )
+  required_items <- dictionary_table$variable_name
+  required_columns <- unique(c(required_covariates, required_totals, required_items))
+  missing_columns <- setdiff(required_columns, names(data))
+  if (length(missing_columns)) {
+    stop("Required analysis columns missing: ", paste(missing_columns, collapse = ", "))
+  }
+
+  response_time_columns <- grep("^timetaken", names(data), value = TRUE)
+  if (!length(response_time_columns)) stop("No response-time columns matching ^timetaken were found.")
+  optional_ids <- intersect(c("analysis_id", "participant_hash"), names(data))
+  selected_columns <- unique(c(optional_ids, required_columns, response_time_columns))
+
+  selected_data <- if (data.table::is.data.table(data)) {
+    data[, selected_columns, with = FALSE]
+  } else {
+    data[, selected_columns, drop = FALSE]
+  }
+  selected_data <- data.table::as.data.table(selected_data)
+  attr(selected_data, "icu_original_column_count") <- ncol(data)
+  attr(selected_data, "icu_selected_column_count") <- length(selected_columns)
+  attr(selected_data, "icu_selected_columns") <- selected_columns
+  message(
+    "Analysis-column selection: retained ", length(selected_columns),
+    " of ", ncol(data), " source columns."
+  )
+  selected_data
+}
+
 .icu_launch_pipeline <- function(
   input_file,
   output_dir,
@@ -92,7 +135,9 @@ run_icu_network_pipeline <- function(
   if (!is.data.frame(data)) stop("`data` must be a data.frame or data.table.")
   if (!requireNamespace("data.table", quietly = TRUE)) stop("Install data.table first.")
 
-  input_data <- data.table::as.data.table(data)
+  original_column_count <- ncol(data)
+  input_data <- .icu_select_analysis_input(data, dictionary)
+  selected_columns <- names(input_data)
   generated_ids <- character()
   if (!"analysis_id" %in% names(input_data)) {
     input_data[, analysis_id := sprintf("AUTO-%08d", seq_len(.N))]
@@ -142,6 +187,14 @@ run_icu_network_pipeline <- function(
       file.path(result, "INPUT_ID_PROVENANCE.txt")
     )
   }
+  data.table::fwrite(
+    data.table::data.table(
+      source_column_count = original_column_count,
+      selected_source_column_count = length(selected_columns),
+      selected_column = selected_columns
+    ),
+    file.path(result, "INPUT_COLUMN_SELECTION.csv")
+  )
   invisible(result)
 }
 
