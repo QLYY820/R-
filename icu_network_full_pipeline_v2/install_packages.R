@@ -1,46 +1,23 @@
-## Reproducible package bootstrap for the bastion host.
-## R 4.1.x cannot resolve the current CRAN dependency chain for several
-## network-analysis packages, so it uses a compatible frozen repository.
+## Reproducible package bootstrap for the ICU network pipeline.
+
+.icu_installer_file <- local({
+  source_file <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
+  if (is.null(source_file) || !nzchar(source_file)) {
+    normalizePath("install_packages.R", mustWork = TRUE)
+  } else {
+    normalizePath(source_file, mustWork = TRUE)
+  }
+})
 
 r_version <- getRversion()
 legacy_r <- r_version < "4.2.0"
+worker_mode <- identical(Sys.getenv("ICU_PACKAGE_INSTALL_WORKER"), "1")
 cran_repo <- if (legacy_r) {
   "https://packagemanager.posit.co/cran/2022-02-01"
 } else {
   "https://cloud.r-project.org"
 }
 
-options(
-  repos = c(CRAN = cran_repo),
-  timeout = max(1200L, getOption("timeout", 60L))
-)
-
-message("R version: ", r_version)
-message("Package repository: ", cran_repo)
-
-## Keep the frozen R 4.1 dependency stack isolated from packages previously
-## installed from current CRAN. R_LIBS_USER is inherited by every Rscript and
-## PSOCK worker launched by the pipeline.
-if (legacy_r) {
-  user_library <- path.expand("~/R/icu-network-r4.1-snapshot-2022-02-01")
-  dir.create(user_library, recursive = TRUE, showWarnings = FALSE)
-  Sys.setenv(R_LIBS_USER = user_library)
-  .libPaths(c(user_library, .Library))
-} else {
-  user_library <- .libPaths()[1]
-}
-
-dir.create(user_library, recursive = TRUE, showWarnings = FALSE)
-message("Pipeline package library: ", user_library)
-message("Active package libraries: ", paste(.libPaths(), collapse = " | "))
-stale_locks <- list.files(user_library, pattern = "^00LOCK", full.names = TRUE)
-if (length(stale_locks)) {
-  message("Removing stale package-install locks: ", paste(basename(stale_locks), collapse = ", "))
-  unlink(stale_locks, recursive = TRUE, force = TRUE)
-}
-
-## The order is intentional. It resolves the qgraph/NCT/networktools/mgm/bootnet
-## dependency chain before packages that import the complete stack.
 required_packages <- c(
   "data.table", "MASS", "Matrix", "psych", "ggplot2", "MatchIt", "cobalt",
   "sandwich", "lmtest", "patchwork", "openssl",
@@ -48,69 +25,111 @@ required_packages <- c(
   "networktools", "mgm", "NetworkToolbox", "bootnet"
 )
 
-install_one <- function(package) {
-  package_path <- suppressWarnings(find.package(package, lib.loc = .libPaths(), quiet = TRUE))
-  if (nzchar(package_path)) {
-    version <- utils::packageDescription(package, lib.loc = dirname(package_path))$Version
-    message("Available: ", package, " ", version)
-    return(invisible(TRUE))
-  }
+locate_package <- function(package) {
+  path <- suppressWarnings(find.package(package, lib.loc = .libPaths(), quiet = TRUE))
+  if (!length(path)) "" else path[[1L]]
+}
 
-  message("Installing: ", package)
-  utils::install.packages(
-    package,
-    repos = cran_repo,
-    dependencies = c("Depends", "Imports", "LinkingTo"),
-    Ncpus = max(1L, min(4L, parallel::detectCores() - 1L))
+install_stack <- function() {
+  options(
+    repos = c(CRAN = cran_repo),
+    timeout = max(1200L, getOption("timeout", 60L))
   )
 
-  package_path <- suppressWarnings(find.package(package, lib.loc = .libPaths(), quiet = TRUE))
-  if (!nzchar(package_path)) {
-    stop(
-      "Package installation failed: ", package,
-      ". Review the installation messages immediately above this line."
-    )
+  user_library <- Sys.getenv("R_LIBS_USER", unset = .libPaths()[1])
+  dir.create(user_library, recursive = TRUE, showWarnings = FALSE)
+  .libPaths(c(user_library, .Library))
+
+  message("R version: ", r_version)
+  message("Package repository: ", cran_repo)
+  message("Pipeline package library: ", user_library)
+  message("Active package libraries: ", paste(.libPaths(), collapse = " | "))
+
+  stale_locks <- list.files(user_library, pattern = "^00LOCK", full.names = TRUE)
+  if (length(stale_locks)) {
+    message("Removing stale package-install locks: ", paste(basename(stale_locks), collapse = ", "))
+    unlink(stale_locks, recursive = TRUE, force = TRUE)
   }
-  version <- utils::packageDescription(package, lib.loc = dirname(package_path))$Version
-  message("Installed: ", package, " ", version)
+
+  install_one <- function(package) {
+    package_path <- locate_package(package)
+    if (nzchar(package_path)) {
+      version <- utils::packageDescription(package, lib.loc = dirname(package_path))$Version
+      message("Available: ", package, " ", version)
+      return(invisible(TRUE))
+    }
+
+    message("Installing: ", package)
+    utils::install.packages(
+      package,
+      lib = user_library,
+      repos = cran_repo,
+      dependencies = c("Depends", "Imports", "LinkingTo"),
+      Ncpus = max(1L, min(4L, parallel::detectCores() - 1L))
+    )
+
+    package_path <- locate_package(package)
+    if (!nzchar(package_path)) {
+      stop(
+        "Package installation failed: ", package,
+        ". Review the installation messages immediately above this line."
+      )
+    }
+    version <- utils::packageDescription(package, lib.loc = dirname(package_path))$Version
+    message("Installed: ", package, " ", version)
+    invisible(TRUE)
+  }
+
+  for (package in required_packages) install_one(package)
+
+  load_checks <- vapply(
+    required_packages,
+    requireNamespace,
+    quietly = TRUE,
+    FUN.VALUE = logical(1)
+  )
+  if (!all(load_checks)) {
+    stop("Namespaces not loadable: ", paste(names(load_checks)[!load_checks], collapse = ", "))
+  }
+
+  versions <- vapply(
+    required_packages,
+    function(package) as.character(utils::packageVersion(package)),
+    FUN.VALUE = character(1)
+  )
+  message("CLEAN_SESSION_PACKAGE_LOAD_OK")
+  print(data.frame(package = required_packages, version = unname(versions)))
   invisible(TRUE)
 }
 
-for (package in required_packages) install_one(package)
+if (legacy_r && !worker_mode) {
+  ## The clean child process excludes packages previously installed in the
+  ## user's normal library and in the host site-library. The same environment
+  ## is inherited by the analysis Rscript and all PSOCK workers.
+  private_library <- path.expand("~/R/icu-network-r4.1-snapshot-2022-02-01")
+  empty_site_library <- file.path(private_library, "empty-site-library")
+  dir.create(private_library, recursive = TRUE, showWarnings = FALSE)
+  dir.create(empty_site_library, recursive = TRUE, showWarnings = FALSE)
+  Sys.setenv(R_LIBS_USER = private_library, R_LIBS_SITE = empty_site_library)
 
-package_paths <- vapply(
-  required_packages,
-  function(package) suppressWarnings(find.package(package, lib.loc = .libPaths(), quiet = TRUE)),
-  FUN.VALUE = character(1)
-)
-if (any(!nzchar(package_paths))) {
-  stop("Packages still missing from active libraries: ", paste(names(package_paths)[!nzchar(package_paths)], collapse = ", "))
+  rscript <- file.path(R.home("bin"), if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript")
+  worker_expression <- paste0("source(", deparse(.icu_installer_file), ")")
+  message("Launching isolated R 4.1 package installer...")
+  status <- system2(
+    rscript,
+    args = c("-e", shQuote(worker_expression)),
+    env = c(
+      "ICU_PACKAGE_INSTALL_WORKER=1",
+      paste0("R_LIBS_USER=", private_library),
+      paste0("R_LIBS_SITE=", empty_site_library)
+    )
+  )
+  if (!identical(status, 0L)) {
+    stop("Isolated package installation returned nonzero status ", status, ".")
+  }
+
+  .libPaths(c(private_library, .Library))
+  message("Package installation completed in the isolated R 4.1 library.")
+} else {
+  install_stack()
 }
-
-installed_versions <- vapply(
-  seq_along(required_packages),
-  function(i) utils::packageDescription(required_packages[[i]], lib.loc = dirname(package_paths[[i]]))$Version,
-  FUN.VALUE = character(1)
-)
-
-## Validate namespace loading in a clean child process. This catches mixed
-## dependency stacks before the several-hour analysis starts.
-validation_script <- tempfile(pattern = "icu_package_validation_", fileext = ".R")
-on.exit(unlink(validation_script, force = TRUE), add = TRUE)
-writeLines(
-  c(
-    paste0("packages <- ", paste(deparse(required_packages), collapse = "")),
-    "ok <- vapply(packages, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))",
-    "if (!all(ok)) stop('Namespaces not loadable: ', paste(names(ok)[!ok], collapse = ', '))",
-    "cat('CLEAN_SESSION_PACKAGE_LOAD_OK\\n')"
-  ),
-  validation_script
-)
-rscript <- file.path(R.home("bin"), if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript")
-validation_status <- system2(rscript, validation_script)
-if (!identical(validation_status, 0L)) {
-  stop("Package namespace validation failed in a clean R session.")
-}
-
-message("All required R packages are installed and loadable in a clean session.")
-print(data.frame(package = required_packages, version = unname(installed_versions)))
