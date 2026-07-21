@@ -22,6 +22,12 @@ After the formal dataset has been loaded into R as an object named `data`:
 
 ```r
 stopifnot(exists("data"), is.data.frame(data))
+source("preflight_data_object.R")
+preflight <- preflight_icu_data(data)
+
+# Continue only when this is TRUE:
+preflight$ready
+
 source("run_from_R_object.R")
 
 run_icu_network_pipeline(
