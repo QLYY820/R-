@@ -70,11 +70,11 @@ run_match<-function(dt,covars,label,folder,exact_vars=NULL){
   if(sum(dt$icu==1L)==0L||sum(dt$icu==0L)==0L)stop(label,": both exposure groups required")
   form<-reformulate(covars,response="icu")
   stronger_exact<-unique(c(exact_vars,intersect(c("A_q5"),covars)))
-  attempts<-list(list(cal=.20,exact=NULL,mah=NULL,order="closest"),
-                 list(cal=.10,exact=exact_vars,mah=c("A_age","A_gongzuoshichang"),order="closest"),
-                 list(cal=.05,exact=exact_vars,mah=c("A_age","A_gongzuoshichang"),order="closest"),
-                 list(cal=.05,exact=stronger_exact,mah=c("A_age","A_gongzuoshichang"),order="closest"),
-                 list(cal=.03,exact=stronger_exact,mah=c("A_age","A_gongzuoshichang"),order="closest"))
+  attempts<-list(list(cal=.20,exact=NULL,mah=NULL,order="largest"),
+                 list(cal=.10,exact=exact_vars,mah=c("A_age","A_gongzuoshichang"),order="largest"),
+                 list(cal=.05,exact=exact_vars,mah=c("A_age","A_gongzuoshichang"),order="largest"),
+                 list(cal=.05,exact=stronger_exact,mah=c("A_age","A_gongzuoshichang"),order="largest"),
+                 list(cal=.03,exact=stronger_exact,mah=c("A_age","A_gongzuoshichang"),order="largest"))
   attempts<-c(attempts,lapply(seq_len(20L),function(i)list(cal=if(i%%2L).10 else .05,exact=exact_vars,
     mah=c("A_age","A_gongzuoshichang"),order="random")))
   chosen<-NULL;best<-Inf

@@ -18,7 +18,11 @@ bootstrap_cores<-as.integer(Sys.getenv("ICU_BOOTSTRAP_CORES",min(8L,cores)))
 run_step<-function(id,script,args){marker<-file.path(state,paste0(id,".PASS"));if(file.exists(marker)){append_log(master,"RESUME skip",id);return(invisible())}
   console<-file.path(logs,paste0(id,"_console.log"));append_log(master,"RUN",id)
   status<-system2(rscript,args=shQuote(c(file.path(code_dir,script),args)),stdout=console,stderr=console)
-  if(!identical(status,0L))stop("Step failed: ",id,"; see ",console)
+  if(!identical(status,0L)){
+    lines<-readLines(console,warn=FALSE)
+    if(length(lines))cat(tail(lines,80L),sep="\n")
+    stop("Step failed: ",id,"; see ",console)
+  }
   writeLines(paste(Sys.time(),"PASS"),marker);append_log(master,"PASS",id)}
 
 run_step("01_preparation","01_prepare_scored_eligible.R",c(input,dictionary,file.path(out,"01_preparation"),file.path(logs,"01_preparation.log")))
