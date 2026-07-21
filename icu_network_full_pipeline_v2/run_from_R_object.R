@@ -18,10 +18,23 @@ run_icu_network_pipeline <- function(
   if (!file.exists(dictionary)) stop("Dictionary not found: ", dictionary)
   if (!file.exists(config)) stop("Configuration not found: ", config)
 
+  input_data <- data.table::copy(data.table::as.data.table(data))
+  generated_ids <- character()
+  if (!"analysis_id" %in% names(input_data)) {
+    input_data[, analysis_id := sprintf("AUTO-%08d", seq_len(.N))]
+    generated_ids <- c(generated_ids, "analysis_id")
+  }
+  if (!"participant_hash" %in% names(input_data)) {
+    input_data[, participant_hash := paste0("ROW-", analysis_id)]
+    generated_ids <- c(generated_ids, "participant_hash")
+  }
+  if (anyDuplicated(input_data$analysis_id)) stop("analysis_id contains duplicates.")
+  if (anyDuplicated(input_data$participant_hash)) stop("participant_hash contains duplicates.")
+
   output_dir <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
   temp_input <- tempfile(pattern = "icu_network_input_", fileext = ".csv")
   on.exit(unlink(temp_input, force = TRUE), add = TRUE)
-  data.table::fwrite(data.table::as.data.table(data), temp_input)
+  data.table::fwrite(input_data, temp_input)
 
   rscript <- file.path(R.home("bin"), if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript")
   pipeline <- file.path(.icu_pipeline_root, "R", "final_analysis_pipeline.R")
@@ -43,6 +56,17 @@ run_icu_network_pipeline <- function(
   status <- system2(rscript, args = shQuote(args))
   if (!identical(status, 0L)) {
     stop("Pipeline returned nonzero status ", status, ". Check <output_dir>/logs/.")
+  }
+  if (length(generated_ids)) {
+    writeLines(
+      c(
+        "Technical identifiers absent from the source object were generated automatically.",
+        "They are internal row-tracking fields and do not alter analysis variables.",
+        paste("Technical IDs generated from row order:", paste(generated_ids, collapse = ", ")),
+        paste("Rows:", nrow(input_data))
+      ),
+      file.path(output_dir, "INPUT_ID_PROVENANCE.txt")
+    )
   }
   invisible(normalizePath(output_dir, winslash = "/", mustWork = TRUE))
 }

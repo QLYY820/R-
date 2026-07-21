@@ -23,7 +23,7 @@ preflight_icu_data <- function(
     "G_naolipifa"
   )
   required_items <- dictionary$variable_name
-  required <- unique(c(required_ids, required_covariates, required_totals, required_items))
+  required <- unique(c(required_covariates, required_totals, required_items))
   missing <- setdiff(required, names(data))
   time_columns <- grep("^timetaken", names(data), value = TRUE)
   repaired_columns <- grep("^\\.\\.\\.[0-9]+$", names(data), value = TRUE)
@@ -50,7 +50,7 @@ preflight_icu_data <- function(
   checks <- data.table::data.table(
     check = c(
       "data_is_data_frame", "required_columns_present", "all_62_items_present",
-      "response_time_column_present", "item_values_in_range", "participant_id_available"
+      "response_time_column_present", "item_values_in_range", "technical_id_handling"
     ),
     status = c(
       "PASS",
@@ -58,7 +58,7 @@ preflight_icu_data <- function(
       if (all(required_items %in% names(data))) "PASS" else "FAIL",
       if (length(time_columns) > 0L) "PASS" else "FAIL",
       if (all(item_audit$n_out_of_range[!item_audit$missing_column] == 0L)) "PASS" else "FAIL",
-      if (all(required_ids %in% names(data))) "PASS" else "FAIL"
+      "PASS"
     ),
     detail = c(
       paste("rows=", nrow(data), "columns=", ncol(data)),
@@ -66,7 +66,8 @@ preflight_icu_data <- function(
       paste(sum(required_items %in% names(data)), "of 62"),
       if (length(time_columns)) paste(time_columns, collapse = ", ") else "none",
       paste("out-of-range=", sum(item_audit$n_out_of_range, na.rm = TRUE)),
-      if (all(required_ids %in% names(data))) paste("duplicate-ID rows=", duplicate_ids) else paste(setdiff(required_ids, names(data)), collapse = ", ")
+      if (all(required_ids %in% names(data))) paste("duplicate-ID rows=", duplicate_ids) else
+        paste("will auto-generate internal row IDs:", paste(setdiff(required_ids, names(data)), collapse = ", "))
     )
   )
 
