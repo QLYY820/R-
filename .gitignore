@@ -20,6 +20,8 @@ analysis_outputs_*/
 *.RData
 *.sas7bdat
 *.sav
+*.zip
+*.tar.gz
 
 # Allow small documentation CSV examples only if deliberately force-added.
 !examples/*.csv

@@ -970,5 +970,43 @@ manifest <- c(
 )
 writeLines(manifest, file.path(out_dir, "_analysis_outputs.md"), useBytes = TRUE)
 
+archive_output_dir <- function(path) {
+  path <- normalizePath(path, winslash = "/", mustWork = TRUE)
+  parent <- dirname(path)
+  folder <- basename(path)
+  zip_path <- file.path(parent, paste0(folder, ".zip"))
+  tar_path <- file.path(parent, paste0(folder, ".tar.gz"))
+
+  oldwd <- getwd()
+  on.exit(setwd(oldwd), add = TRUE)
+  setwd(parent)
+
+  zip_ok <- FALSE
+  zip_attempt <- tryCatch({
+    if (file.exists(zip_path)) unlink(zip_path)
+    utils::zip(zipfile = zip_path, files = folder)
+    file.exists(zip_path) && file.info(zip_path)$size > 0
+  }, error = function(e) FALSE, warning = function(w) FALSE)
+  zip_ok <- isTRUE(zip_attempt)
+
+  if (zip_ok) {
+    return(normalizePath(zip_path, winslash = "/", mustWork = TRUE))
+  }
+
+  if (file.exists(tar_path)) unlink(tar_path)
+  utils::tar(tarfile = tar_path, files = folder, compression = "gzip")
+  if (file.exists(tar_path) && file.info(tar_path)$size > 0) {
+    return(normalizePath(tar_path, winslash = "/", mustWork = TRUE))
+  }
+
+  NA_character_
+}
+
+archive_path <- archive_output_dir(out_dir)
+
 cat("Analysis completed.\n")
 cat(normalizePath(out_dir, winslash = "/", mustWork = FALSE), "\n")
+if (!is.na(archive_path)) {
+  cat("Archive created.\n")
+  cat(archive_path, "\n")
+}

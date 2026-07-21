@@ -46,6 +46,8 @@ source("go.R")
 This runs the full analysis and writes outputs to `analysis_outputs_full`.
 By default, this is a fast first run: bootstrap CIs and CFA are skipped so the
 script can finish quickly on the full 48k-row dataset.
+At the end, the script also creates `analysis_outputs_full.zip` for download.
+If zip is unavailable on the server, it creates `analysis_outputs_full.tar.gz`.
 
 Optional slower manuscript run with bootstrap and CFA:
 

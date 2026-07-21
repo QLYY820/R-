@@ -42,6 +42,13 @@ run_hrpl_review <- function(dat = get("data", envir = .GlobalEnv),
   }
 
   message("Done. Outputs are in: ", normalizePath(out, winslash = "/", mustWork = FALSE))
+  zip_path <- paste0(normalizePath(out, winslash = "/", mustWork = FALSE), ".zip")
+  tar_path <- paste0(normalizePath(out, winslash = "/", mustWork = FALSE), ".tar.gz")
+  if (file.exists(zip_path)) {
+    message("Download this file: ", zip_path)
+  } else if (file.exists(tar_path)) {
+    message("Download this file: ", tar_path)
+  }
   invisible(normalizePath(out, winslash = "/", mustWork = FALSE))
 }
 
