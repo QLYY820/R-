@@ -1,0 +1,18 @@
+# Never commit protected nurse-level data or generated results.
+data/
+results/
+output/
+OR_blood_fluid_results/
+*.xlsx
+*.xls
+*.csv
+*.csv.gz
+*.rds
+*.RData
+*.rda
+*.sav
+*.dta
+*.sas7bdat
+*.png
+*.pdf
+sessionInfo*.txt
