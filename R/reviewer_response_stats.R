@@ -185,6 +185,7 @@ read_input <- function(path, sheet = NULL) {
 
 dat <- read_input(input_path, args$sheet)
 names(dat) <- trimws(names(dat))
+dat_raw <- dat
 
 for (nm in names(dat)) {
   if (!inherits(dat[[nm]], "Date") && !is.numeric(dat[[nm]])) {
@@ -207,10 +208,28 @@ make_score_if_missing <- function(score_name, item_names, label) {
   score_name
 }
 
+make_binary_if_missing <- function(target_col, raw_col, label) {
+  if (exists_col(target_col)) return(target_col)
+  if (!exists_col(raw_col)) return(target_col)
+  x <- safe_num(dat[[raw_col]])
+  vals <- sort(unique(x[!is.na(x)]))
+  if (length(vals) == 0) return(target_col)
+  if (all(vals %in% c(0, 1))) {
+    dat[[target_col]] <<- x
+    message(sprintf("Created %s binary variable from %s using existing 0/1 coding: %s", label, raw_col, target_col))
+  } else if (all(vals %in% c(1, 2))) {
+    dat[[target_col]] <<- ifelse(is.na(x), NA_real_, ifelse(x == 1, 1, ifelse(x == 2, 0, NA_real_)))
+    message(sprintf("Created %s binary variable from %s assuming 1=yes and 2=no: %s", label, raw_col, target_col))
+  }
+  target_col
+}
+
 vars$hrpl <- make_score_if_missing(vars$hrpl, vars$hrpl_items, "HRPL")
 vars$fatigue <- make_score_if_missing(vars$fatigue, vars$fatigue_items, "fatigue")
 vars$depression <- make_score_if_missing(vars$depression, vars$depression_items, "depression")
 vars$support <- make_score_if_missing(vars$support, vars$support_items, "social support")
+vars$tea_binary <- make_binary_if_missing(vars$tea_binary, "q33", "coffee/tea")
+vars$milk_binary <- make_binary_if_missing(vars$milk_binary, "q35", "milk")
 
 if (!exists_col(vars$support_family)) {
   fam_items <- available(c("q4_3", "q4_4", "q4_8", "q4_11"))
@@ -676,17 +695,40 @@ dimension_runs <- lapply(names(dimension_specs), function(lbl) fit_moderated_med
 dimension_interactions <- bind_rows(lapply(dimension_runs, `[[`, "interactions"))
 write_csv_utf8(dimension_interactions, "support_dimension_moderation.csv")
 
-make_product <- function(a, b, nm) {
+is_no_binary <- function(binary_col) {
+  if (is.null(binary_col) || !exists_col(binary_col)) return(rep(FALSE, nrow(dat)))
+  x <- safe_num(dat[[binary_col]])
+  x == 0
+}
+
+raw_is_skip <- function(col) {
+  if (!col %in% names(dat_raw)) return(rep(FALSE, nrow(dat)))
+  y <- trimws(as.character(dat_raw[[col]]))
+  is.na(dat_raw[[col]]) | y %in% c("", "NA", "N/A", "na", "Na", "None", "NULL", "null", "(skip)", "skip", "无", "(跳过)", "跳过")
+}
+
+make_product <- function(a, b, nm, binary_col = NULL, zero_if_both_missing = TRUE) {
   if (exists_col(a) && exists_col(b)) {
-    dat[[nm]] <<- safe_num(dat[[a]]) * safe_num(dat[[b]])
-    dat[[nm]][is.na(safe_num(dat[[a]])) | is.na(safe_num(dat[[b]]))] <<- NA
+    ax <- safe_num(dat[[a]])
+    bx <- safe_num(dat[[b]])
+    product <- ax * bx
+    both_missing <- is.na(ax) & is.na(bx)
+    one_missing <- xor(is.na(ax), is.na(bx))
+    no_overall <- is_no_binary(binary_col)
+    both_raw_skip <- raw_is_skip(a) & raw_is_skip(b)
+
+    product[no_overall & (both_missing | one_missing)] <- 0
+    product[(both_raw_skip | (zero_if_both_missing & both_missing)) & !one_missing] <- 0
+    product[one_missing & !no_overall] <- NA_real_
+
+    dat[[nm]] <<- product
   }
 }
-make_product(vars$coffee_days, vars$coffee_daily_amount, "coffee_month_amount")
-make_product(vars$tea_days, vars$tea_daily_amount, "tea_month_amount")
-make_product(vars$yogurt_days, vars$yogurt_daily_amount, "yogurt_month_amount")
-make_product(vars$milk_days, vars$milk_daily_amount, "pure_milk_month_amount")
-make_product(vars$other_milk_days, vars$other_milk_daily_amount, "other_milk_month_amount")
+make_product(vars$coffee_days, vars$coffee_daily_amount, "coffee_month_amount", vars$tea_binary)
+make_product(vars$tea_days, vars$tea_daily_amount, "tea_month_amount", vars$tea_binary)
+make_product(vars$yogurt_days, vars$yogurt_daily_amount, "yogurt_month_amount", vars$milk_binary)
+make_product(vars$milk_days, vars$milk_daily_amount, "pure_milk_month_amount", vars$milk_binary)
+make_product(vars$other_milk_days, vars$other_milk_daily_amount, "other_milk_month_amount", vars$milk_binary)
 milk_components <- available(c("yogurt_month_amount", "pure_milk_month_amount", "other_milk_month_amount"))
 if (length(milk_components) > 0) {
   mat <- dat[, milk_components, drop = FALSE]

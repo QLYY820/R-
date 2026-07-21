@@ -92,6 +92,11 @@ The defaults match the current manuscript/simulated-data dictionary:
   - `tea`, `milk`
   - `q34_1`, `q34_2`, `q34_3`, `q34_4`
   - `q36_1`, `q36_2`, `q36_3`, `q36_4`, `q36_6`, `q36_7`
+  - If `tea` or `milk` are absent, the script creates them from `q33` and
+    `q35`, assuming `1 = yes` and `2 = no`.
+  - For beverage dose variables, `(跳过)`, `跳过`, `无`, and blank cells are
+    treated as structural zeros where the corresponding beverage was not used,
+    instead of being treated as ordinary missing values.
 - Default covariates, if present:
   - `gender`, `age`, `type`, `zhic`, `p`, `income`, `tea`, `milk`,
     `education`, `EDU`, `HUNYIN`, `kesi`, `BMI`, `A_gongzuoshichang`,
