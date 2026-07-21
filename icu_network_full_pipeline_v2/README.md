@@ -18,6 +18,10 @@ Install or verify packages once:
 source("install_packages.R")
 ```
 
+On the bastion host running R 4.1.x, this script uses the frozen 2022-02-01
+repository so the qgraph, NCT, networktools, mgm, and bootnet dependency chain is
+installed from mutually compatible package versions. Newer R versions use CRAN.
+
 After the formal dataset has been loaded into R as an object named `data`:
 
 ```r
