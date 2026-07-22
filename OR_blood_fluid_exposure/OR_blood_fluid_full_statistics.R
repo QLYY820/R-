@@ -44,7 +44,7 @@ dictionary_file <- if (nzchar(dictionary_arg) && file.exists(dictionary_arg)) no
 dir.create(output_arg, recursive = TRUE, showWarnings = FALSE)
 output_dir <- normalizePath(output_arg, mustWork = TRUE)
 
-required_packages <- c("data.table", "psych", "sandwich", "lmtest", "survey", "car", "quantreg", "MatchIt", "ggplot2", "splines")
+required_packages <- c("data.table", "psych", "sandwich", "lmtest", "car", "quantreg", "MatchIt", "ggplot2", "splines")
 if (!is.na(dictionary_file)) required_packages <- c(required_packages, "readxl")
 missing_packages <- setdiff(required_packages, rownames(installed.packages()))
 if (length(missing_packages) && identical(Sys.getenv("OR_INSTALL_PACKAGES", unset = "0"), "1")) {
@@ -61,7 +61,6 @@ suppressWarnings(suppressPackageStartupMessages({
   library(psych)
   library(sandwich)
   library(lmtest)
-  library(survey)
   library(car)
   library(quantreg)
   library(MatchIt)
@@ -664,8 +663,8 @@ write_csv(extended_binary,"30_extended_binary_results.csv")
 # Corrected overlap-weighted outcome analyses (ATO) using validated age/work-experience derivations.
 overlap_continuous_extended <- rbindlist(lapply(names(continuous_map),function(label){
   y <- unname(continuous_map[label]); dd <- ps_data[!is.na(get(y))]
-  des <- svydesign(ids=~1,weights=~ow,data=dd); fit <- svyglm(as.formula(paste(y,"~exposure")),design=des,family=gaussian())
-  cc <- summary(fit)$coefficients; est <- cc["exposure","Estimate"]; se <- cc["exposure","Std. Error"]; p <- cc["exposure",ncol(cc)]
+  fit <- lm(as.formula(paste(y,"~exposure")),data=dd,weights=ow)
+  cc <- coeftest(fit,vcov.=vcovHC(fit,type="HC0")); est <- cc["exposure",1]; se <- cc["exposure",2]; p <- cc["exposure",4]
   m0 <- weighted_mean_safe(dd[exposure==0][[y]],dd[exposure==0]$ow); m1 <- weighted_mean_safe(dd[exposure==1][[y]],dd[exposure==1]$ow); ys <- sd(dd[[y]])
   data.table(outcome=label,n=nrow(dd),weighted_mean_no=m0,weighted_mean_yes=m1,mean_difference=est,ci_lower=est-1.96*se,ci_upper=est+1.96*se,
              standardized_difference=est/ys,standardized_ci_lower=(est-1.96*se)/ys,standardized_ci_upper=(est+1.96*se)/ys,p=p)
@@ -676,8 +675,8 @@ write_csv(overlap_continuous_extended,"41_overlap_weighted_continuous_extended.c
 
 overlap_binary_extended <- rbindlist(lapply(names(binary_map),function(label){
   y <- unname(binary_map[label]); dd <- ps_data[!is.na(get(y))]
-  des <- svydesign(ids=~1,weights=~ow,data=dd); fit <- svyglm(as.formula(paste(y,"~exposure")),design=des,family=quasipoisson(link="log"))
-  cc <- summary(fit)$coefficients; est <- cc["exposure","Estimate"]; se <- cc["exposure","Std. Error"]; p <- cc["exposure",ncol(cc)]
+  fit <- suppressWarnings(glm(as.formula(paste(y,"~exposure")),data=dd,weights=ow,family=poisson(link="log")))
+  cc <- coeftest(fit,vcov.=vcovHC(fit,type="HC0")); est <- cc["exposure",1]; se <- cc["exposure",2]; p <- cc["exposure",4]
   p0 <- weighted_mean_safe(dd[exposure==0][[y]],dd[exposure==0]$ow); p1 <- weighted_mean_safe(dd[exposure==1][[y]],dd[exposure==1]$ow)
   data.table(outcome=label,n=nrow(dd),weighted_prevalence_no=p0,weighted_prevalence_yes=p1,prevalence_ratio=exp(est),
              pr_ci_lower=exp(est-1.96*se),pr_ci_upper=exp(est+1.96*se),prevalence_difference=p1-p0,p=p)
@@ -851,10 +850,10 @@ qlo <- quantile(ps_data$ow,.01); qhi <- quantile(ps_data$ow,.99); ps_data[,ow_tr
 ow_primary <- overlap_continuous_extended[outcome=="MBI_emotional_exhaustion"]
 robustness[[rr]] <- data.table(analysis="Overlap weighting after common-support restriction",n=ow_primary$n,estimand="ATO weighted mean difference",
   estimate=ow_primary$mean_difference,ci_lower=ow_primary$ci_lower,ci_upper=ow_primary$ci_upper,p=ow_primary$p);rr<-rr+1L
-ow_dd <- ps_data[!is.na(MBI_EE)]; des_trim <- svydesign(ids=~1,weights=~ow_trim,data=ow_dd); owfit <- svyglm(MBI_EE~exposure,design=des_trim)
-cc <- summary(owfit)$coefficients; est<-cc["exposure","Estimate"];se<-cc["exposure","Std. Error"]
+ow_dd <- ps_data[!is.na(MBI_EE)]; owfit <- lm(MBI_EE~exposure,data=ow_dd,weights=ow_trim)
+cc <- coeftest(owfit,vcov.=vcovHC(owfit,type="HC0")); est<-cc["exposure",1];se<-cc["exposure",2]
 robustness[[rr]] <- data.table(analysis="Overlap weights truncated at 1st/99th percentiles",n=nrow(ow_dd),estimand="ATO weighted mean difference",
-  estimate=est,ci_lower=est-1.96*se,ci_upper=est+1.96*se,p=cc["exposure",ncol(cc)]);rr<-rr+1L
+  estimate=est,ci_lower=est-1.96*se,ci_upper=est+1.96*se,p=cc["exposure",4]);rr<-rr+1L
 
 manager_vars <- c("MBI_EE","exposure",core_cov,"admin_role"); manager_frame <- droplevels(or_all[complete.cases(or_all[,..manager_vars])])
 robustness[[rr]] <- add_lm_sens(MBI_EE ~ exposure + age + work_years + sex + first_education + highest_education + marital + employment + title + admin_role,
@@ -902,7 +901,7 @@ model_register <- data.table(
                   "MBI emotional exhaustion, continuous; high EE >=27 as companion binary endpoint",
                   paste(core_cov,collapse=", "),paste(schedule_cov,collapse=", "),paste(coexposure_cov,collapse=", "),
                   "ATO using overlap weighting after common-support restriction","Benjamini-Hochberg FDR for secondary continuous and binary outcome families",
-                  "HC3 robust SE for regression; survey robust SE for overlap weighting","Education and rare marital, employment, and title categories collapsed only in exploratory subgroup models to avoid sparse-cell instability",
+                  "HC3 robust SE for regression; sandwich HC0 robust SE for overlap-weighted models","Education and rare marital, employment, and title categories collapsed only in exploratory subgroup models to avoid sparse-cell instability",
                   "Associations/differences only; no causal, risk-factor, or longitudinal language"))
 write_csv(model_register,"40_model_specification_register.csv")
 
