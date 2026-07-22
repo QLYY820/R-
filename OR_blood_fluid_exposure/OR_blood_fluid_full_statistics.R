@@ -44,7 +44,8 @@ dictionary_file <- if (nzchar(dictionary_arg) && file.exists(dictionary_arg)) no
 dir.create(output_arg, recursive = TRUE, showWarnings = FALSE)
 output_dir <- normalizePath(output_arg, mustWork = TRUE)
 
-required_packages <- c("data.table", "psych", "sandwich", "lmtest", "survey", "car", "quantreg", "MatchIt", "ggplot2", "readxl", "splines")
+required_packages <- c("data.table", "psych", "sandwich", "lmtest", "survey", "car", "quantreg", "MatchIt", "ggplot2", "splines")
+if (!is.na(dictionary_file)) required_packages <- c(required_packages, "readxl")
 missing_packages <- setdiff(required_packages, rownames(installed.packages()))
 if (length(missing_packages) && identical(Sys.getenv("OR_INSTALL_PACKAGES", unset = "0"), "1")) {
   install.packages(missing_packages, repos = "https://cloud.r-project.org")
@@ -65,7 +66,6 @@ suppressWarnings(suppressPackageStartupMessages({
   library(quantreg)
   library(MatchIt)
   library(ggplot2)
-  library(readxl)
   library(splines)
 }))
 
@@ -435,7 +435,7 @@ if (is.na(dictionary_file)) {
   )
   message("Scale dictionary not supplied; dictionary extract will be empty.")
 } else {
-  dict <- as.data.table(read_excel(dictionary_file, sheet = 1, col_types = "text"))
+  dict <- as.data.table(readxl::read_excel(dictionary_file, sheet = 1, col_types = "text"))
   if (ncol(dict) < 12L) stop("Scale dictionary must contain at least 12 columns.")
   dict_extract <- dict[dict[[3]] %in% unique(c(
     "A_q2","A_q4","A_q5","A_q6","A_q9","A_q10","A_q11","A_q12","C_q8","C_q42",

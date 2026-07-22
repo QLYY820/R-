@@ -74,7 +74,7 @@ Rscript R-/OR_blood_fluid_exposure/OR_blood_fluid_full_statistics.R \
 
 ## R 包
 
-需要：`data.table`、`psych`、`sandwich`、`lmtest`、`survey`、`car`、`quantreg`、`MatchIt`、`ggplot2`、`readxl`。
+需要：`data.table`、`psych`、`sandwich`、`lmtest`、`survey`、`car`、`quantreg`、`MatchIt`、`ggplot2`。仅在提供 `OR_DICTIONARY_FILE` 时才需要 `readxl`；使用已经载入的 `data` 且不读取量表文件时不需要安装 `readxl`。
 
 如果堡垒机允许访问 CRAN，可在第一次运行前设置：
 
