@@ -33,7 +33,12 @@ CFG <- list(
 
   # Optional Word template. Leave blank to use a clean officer template.
   reference_docx = "",
-  generate_manuscript = TRUE,
+  # Set LUTS_GENERATE_MANUSCRIPT=false on restricted Linux servers that do not
+  # provide the system font/image libraries required by officer/flextable/ragg.
+  # Statistical tables, workbooks and publication figures are still generated.
+  generate_manuscript = tolower(Sys.getenv(
+    "LUTS_GENERATE_MANUSCRIPT", unset = "true"
+  )) %in% c("1", "true", "yes", "y"),
 
   # PRODUCTION GATES: keep FALSE until the preflight audit and original
   # questionnaire/export documentation have been checked on the bastion host.

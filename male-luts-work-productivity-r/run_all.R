@@ -52,6 +52,27 @@ tryCatch({
   log_msg("ERROR", conditionMessage(e))
 })
 
+if (status == 0L && !isTRUE(CFG$generate_manuscript)) {
+  no_doc_report <- c(
+    "# 最终流程审计（无Word模式）",
+    "",
+    paste0("- 运行模式：", CFG$run_mode),
+    paste0("- 流水线版本：", CFG$pipeline_version),
+    paste0("- 固定随机种子：", CFG$random_seed),
+    "- 数据审计、量表审计、1～8类LCA、关联分析、连续LUTS对照分析、敏感性分析、Excel表格及投稿图片均已由代码运行。",
+    "- 当前服务器缺少officer/flextable/ragg所需的系统字体和图像库，因此本次按配置跳过DOCX生成。",
+    "- 跳过DOCX不会改变任何统计估计；可将输出目录带回具备文稿依赖的环境后单独生成Word文稿。",
+    "- 当前身份与男性模块路由仍须按审计结果解释；测试模式结果禁止直接投稿。"
+  )
+  write_lines_utf8(no_doc_report, out_path("outputs", "FINAL_PIPELINE_AUDIT_CHINESE.md"))
+  file.copy(
+    out_path("outputs", "FINAL_PIPELINE_AUDIT_CHINESE.md"),
+    out_path("FINAL_PIPELINE_AUDIT_CHINESE.md"),
+    overwrite = TRUE
+  )
+  log_msg("INFO", "Word generation skipped by LUTS_GENERATE_MANUSCRIPT=false; statistical outputs are complete.")
+}
+
 writeLines(capture.output(sessionInfo()), out_path("outputs", "sessionInfo.txt"), useBytes = TRUE)
 file.copy(out_path("outputs", "sessionInfo.txt"), out_path("09_logs", "sessionInfo.txt"), overwrite = TRUE)
 if (status == 0L) {

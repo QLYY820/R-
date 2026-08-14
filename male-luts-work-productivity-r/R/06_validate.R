@@ -13,8 +13,7 @@ syntax <- rbindlist(lapply(r_files, function(f) {
 write_csv_utf8(syntax, out_path("09_logs", "R_syntax_validation.csv"))
 
 required <- c(
-  "outputs/LUTS_work_productivity_working_draft_revised.docx",
-  "outputs/Supplementary_Tables_LUTS.xlsx", "outputs/Supplementary_Methods_LUTS.docx",
+  "outputs/Supplementary_Tables_LUTS.xlsx",
   "outputs/LCA_model_selection_full.csv", "outputs/LCA_local_dependence_full.csv",
   "outputs/SPS6_scoring_audit.xlsx", "outputs/sex_module_linkage_audit.xlsx",
   "outputs/sensitivity_analysis_full.xlsx", "outputs/continuous_LUTS_spline_results.xlsx",
@@ -25,6 +24,13 @@ required <- c(
   "07_figures/Figure2_LCA_profile_heatmap.pdf", "07_figures/Figure2_LCA_profile_heatmap.png", "07_figures/Figure2_LCA_profile_heatmap.tiff",
   "07_figures/Figure3_continuous_LUTS_spline.pdf", "07_figures/Figure3_continuous_LUTS_spline.png", "07_figures/Figure3_continuous_LUTS_spline.tiff"
 )
+if (isTRUE(CFG$generate_manuscript)) {
+  required <- c(
+    "outputs/LUTS_work_productivity_working_draft_revised.docx",
+    "outputs/Supplementary_Methods_LUTS.docx",
+    required
+  )
+}
 paths <- out_path(required)
 artifacts <- data.table(file = required, exists = file.exists(paths), size_bytes = file.info(paths)$size)
 artifacts[, nonempty := exists & !is.na(size_bytes) & size_bytes > 0]
