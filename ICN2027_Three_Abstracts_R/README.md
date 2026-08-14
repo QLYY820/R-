@@ -4,6 +4,10 @@ This repository contains the complete analysis code for the three ICN 2027
 abstracts. It contains no participant-level data and no previously generated
 results.
 
+The code is compatible with R 4.1 or later. Restricted cubic spline bases and
+robust joint tests are implemented within the project, so `rms`, `Hmisc`, `car`,
+`MatrixModels`, and `quantreg` are not required.
+
 ## Run directly in RStudio
 
 1. Clone or download this repository to the bastion host.

@@ -4,7 +4,7 @@
 options(stringsAsFactors = FALSE, width = 180)
 set.seed(42)
 
-required_packages <- c("rms", "sandwich", "lmtest", "car", "ggplot2")
+required_packages <- c("sandwich", "lmtest", "ggplot2")
 
 project_root <- function() {
   candidate <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
@@ -103,6 +103,29 @@ assert_columns <- function(data, columns) {
   invisible(TRUE)
 }
 
+# Restricted cubic spline basis equivalent to Hmisc::rcspline.eval(..., inclx = TRUE,
+# norm = 2), implemented locally so the analysis runs on R 4.1 without rms/Hmisc.
+rcs_basis <- function(x, knots) {
+  knots <- sort(unique(as.numeric(knots)))
+  knot_count <- length(knots)
+  if (knot_count < 3L) stop("At least three distinct spline knots are required.", call. = FALSE)
+  first_knot <- knots[[1L]]
+  last_knot <- knots[[knot_count]]
+  penultimate_knot <- knots[[knot_count - 1L]]
+  scale_factor <- (last_knot - first_knot)^(2 / 3)
+  nonlinear <- matrix(NA_real_, nrow = length(x), ncol = knot_count - 2L)
+  for (index in seq_len(knot_count - 2L)) {
+    nonlinear[, index] <-
+      pmax((x - knots[[index]]) / scale_factor, 0)^3 +
+      ((penultimate_knot - knots[[index]]) *
+         pmax((x - last_knot) / scale_factor, 0)^3 -
+       (last_knot - knots[[index]]) *
+         pmax((x - penultimate_knot) / scale_factor, 0)^3) /
+      (last_knot - penultimate_knot)
+  }
+  cbind(linear = x, nonlinear)
+}
+
 assert_expected_n <- function(observed, expected, label, strict = TRUE) {
   if (strict && !identical(as.integer(observed), as.integer(expected))) {
     stop(label, " did not reproduce: observed ", observed, ", expected ", expected, ".", call. = FALSE)
@@ -158,26 +181,38 @@ robust_coefficient_table <- function(model, vcov_matrix) {
 
 robust_linear_hypothesis <- function(model, coefficient_names, vcov_matrix, label) {
   if (!length(coefficient_names)) stop("No coefficients supplied for: ", label, call. = FALSE)
-  tested <- car::linearHypothesis(
-    model, hypothesis.matrix = coefficient_names, vcov. = vcov_matrix, test = "F"
-  )
-  result_row <- tested[nrow(tested), , drop = FALSE]
-  statistic_column <- intersect(c("F", "Chisq"), colnames(result_row))
-  p_column <- grep("^Pr\\(", colnames(result_row), value = TRUE)
+  coefficient_indices <- match(coefficient_names, names(stats::coef(model)))
+  if (anyNA(coefficient_indices)) {
+    stop("Unknown coefficient(s) in hypothesis: ",
+         paste(coefficient_names[is.na(coefficient_indices)], collapse = ", "), call. = FALSE)
+  }
+  estimates <- stats::coef(model)[coefficient_indices]
+  covariance <- vcov_matrix[coefficient_indices, coefficient_indices, drop = FALSE]
+  restriction_df <- length(coefficient_indices)
+  if (qr(covariance)$rank < restriction_df) {
+    stop("Hypothesis covariance matrix is rank deficient: ", label, call. = FALSE)
+  }
+  wald_chisq <- as.numeric(crossprod(estimates, solve(covariance, estimates)))
+  f_statistic <- wald_chisq / restriction_df
+  denominator_df <- stats::df.residual(model)
   data.frame(
     test = label,
-    numerator_df = if ("Df" %in% colnames(result_row)) unname(result_row[["Df"]]) else NA_real_,
-    statistic = if (length(statistic_column) == 1L) unname(result_row[[statistic_column]]) else NA_real_,
-    p_value = if (length(p_column) == 1L) unname(result_row[[p_column]]) else NA_real_,
+    numerator_df = restriction_df,
+    denominator_df = denominator_df,
+    statistic = f_statistic,
+    p_value = stats::pf(f_statistic, restriction_df, denominator_df, lower.tail = FALSE),
     stringsAsFactors = FALSE
   )
 }
 
-contrast_differences <- function(model, vcov_matrix, newdata, exposure, reference_value) {
+contrast_differences <- function(model, vcov_matrix, newdata, exposure, reference_value,
+                                 reference_data = NULL) {
   terms_without_response <- stats::delete.response(stats::terms(model))
   design <- stats::model.matrix(terms_without_response, newdata, contrasts.arg = model$contrasts)
-  reference_data <- newdata
-  reference_data[[exposure]] <- reference_value
+  if (is.null(reference_data)) {
+    reference_data <- newdata
+    reference_data[[exposure]] <- reference_value
+  }
   reference_design <- stats::model.matrix(
     terms_without_response, reference_data, contrasts.arg = model$contrasts
   )
@@ -253,15 +288,26 @@ score_descriptive_row <- function(score, scope) {
 }
 
 vif_table <- function(model) {
-  result <- tryCatch(suppressWarnings(car::vif(model)), error = function(condition) condition)
-  if (inherits(result, "error")) {
-    return(data.frame(term = NA_character_, note = conditionMessage(result), stringsAsFactors = FALSE))
-  }
-  if (is.matrix(result)) {
-    data.frame(term = rownames(result), result, row.names = NULL, check.names = FALSE)
-  } else {
-    data.frame(term = names(result), VIF = unname(result), row.names = NULL)
-  }
+  design <- stats::model.matrix(model)
+  design <- design[, colnames(design) != "(Intercept)", drop = FALSE]
+  if (!ncol(design)) return(data.frame(term = character(), VIF = numeric()))
+  values <- vapply(seq_len(ncol(design)), function(index) {
+    outcome <- design[, index]
+    if (!is.finite(stats::var(outcome)) || stats::var(outcome) == 0) return(NA_real_)
+    predictors <- design[, -index, drop = FALSE]
+    fit <- stats::lm.fit(cbind(`(Intercept)` = 1, predictors), outcome)
+    residual_sum <- sum(fit$residuals^2)
+    total_sum <- sum((outcome - mean(outcome))^2)
+    r_squared <- 1 - residual_sum / total_sum
+    if (!is.finite(r_squared) || r_squared >= 1) return(Inf)
+    1 / (1 - r_squared)
+  }, numeric(1L))
+  data.frame(
+    term = colnames(design),
+    VIF = values,
+    note = "Coefficient-level VIF; multi-level factors are shown by contrast column.",
+    stringsAsFactors = FALSE
+  )
 }
 
 model_diagnostic_statistics <- function(model) {

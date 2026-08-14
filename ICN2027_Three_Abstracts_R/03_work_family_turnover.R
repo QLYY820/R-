@@ -89,8 +89,12 @@ write_csv_utf8(data.frame(
   percentile = c(5, 35, 65, 95), knot = spline_knots
 ), file.path(output_dir, "spline_knots.csv"))
 
+complete_spline_basis <- rcs_basis(complete_data$work_family_balance, spline_knots)
+complete_data$work_family_rcs1 <- complete_spline_basis[, 2L]
+complete_data$work_family_rcs2 <- complete_spline_basis[, 3L]
+
 spline_model <- stats::lm(
-  turnover_intention ~ rms::rcs(work_family_balance, spline_knots) +
+  turnover_intention ~ work_family_balance + work_family_rcs1 + work_family_rcs2 +
     age_per_10_years + sex + marital_status + department + employment_type,
   data = complete_data
 )
@@ -98,8 +102,8 @@ spline_vcov <- sandwich::vcovHC(spline_model, type = "HC3")
 coefficient_table <- robust_coefficient_table(spline_model, spline_vcov)
 write_csv_utf8(coefficient_table, file.path(output_dir, "robust_regression_coefficients.csv"))
 
-all_spline_terms <- grep("rms::rcs", names(stats::coef(spline_model)), fixed = TRUE, value = TRUE)
-nonlinear_terms <- grep("'", all_spline_terms, fixed = TRUE, value = TRUE)
+all_spline_terms <- c("work_family_balance", "work_family_rcs1", "work_family_rcs2")
+nonlinear_terms <- c("work_family_rcs1", "work_family_rcs2")
 association_tests <- rbind(
   robust_linear_hypothesis(
     spline_model, all_spline_terms, spline_vcov,
@@ -114,8 +118,11 @@ write_csv_utf8(association_tests, file.path(output_dir, "spline_association_test
 nonlinearity_test <- association_tests[2L, , drop = FALSE]
 
 make_newdata <- function(balance_values) {
+  basis <- rcs_basis(balance_values, spline_knots)
   data.frame(
     work_family_balance = balance_values,
+    work_family_rcs1 = basis[, 2L],
+    work_family_rcs2 = basis[, 3L],
     age_per_10_years = 0,
     sex = factor(rep(most_common_level(complete_data$sex), length(balance_values)),
                  levels = levels(complete_data$sex)),
@@ -136,7 +143,8 @@ reference_balance <- 40
 abstract_balance_values <- c(40, 44, 50, 57)
 abstract_contrasts <- contrast_differences(
   spline_model, spline_vcov, make_newdata(abstract_balance_values),
-  exposure = "work_family_balance", reference_value = reference_balance
+  exposure = "work_family_balance", reference_value = reference_balance,
+  reference_data = make_newdata(rep(reference_balance, length(abstract_balance_values)))
 )
 abstract_contrasts$comparison <- paste0(
   "Work-family balance ", abstract_contrasts$exposure_value, " versus ", reference_balance
@@ -162,7 +170,8 @@ curve_balance_values <- seq(
 )
 curve_data <- contrast_differences(
   spline_model, spline_vcov, make_newdata(curve_balance_values),
-  exposure = "work_family_balance", reference_value = reference_balance
+  exposure = "work_family_balance", reference_value = reference_balance,
+  reference_data = make_newdata(rep(reference_balance, length(curve_balance_values)))
 )
 write_csv_utf8(curve_data, file.path(output_dir, "adjusted_spline_curve.csv"))
 

@@ -300,8 +300,13 @@ write_csv_utf8(data.frame(
   percentile = c(5, 35, 65, 95), knot = spline_knots
 ), file.path(output_dir, "corrected_spline_knots.csv"))
 
+complete_spline_basis <- rcs_basis(complete_data$modified_kupperman_index, spline_knots)
+complete_data$modified_kupperman_rcs1 <- complete_spline_basis[, 2L]
+complete_data$modified_kupperman_rcs2 <- complete_spline_basis[, 3L]
+
 spline_model <- stats::lm(
-  sps6_productivity_loss_corrected ~ rms::rcs(modified_kupperman_index, spline_knots) +
+  sps6_productivity_loss_corrected ~ modified_kupperman_index +
+    modified_kupperman_rcs1 + modified_kupperman_rcs2 +
     age_per_10_years + marital_status + department + employment_type + night_shift_group,
   data = complete_data
 )
@@ -309,8 +314,10 @@ spline_vcov <- sandwich::vcovHC(spline_model, type = "HC3")
 coefficient_table <- robust_coefficient_table(spline_model, spline_vcov)
 write_csv_utf8(coefficient_table, file.path(output_dir, "corrected_regression_coefficients.csv"))
 
-all_spline_terms <- grep("rms::rcs", names(stats::coef(spline_model)), fixed = TRUE, value = TRUE)
-nonlinear_terms <- grep("'", all_spline_terms, fixed = TRUE, value = TRUE)
+all_spline_terms <- c(
+  "modified_kupperman_index", "modified_kupperman_rcs1", "modified_kupperman_rcs2"
+)
+nonlinear_terms <- c("modified_kupperman_rcs1", "modified_kupperman_rcs2")
 association_tests <- rbind(
   robust_linear_hypothesis(
     spline_model, all_spline_terms, spline_vcov,
@@ -324,8 +331,11 @@ association_tests <- rbind(
 write_csv_utf8(association_tests, file.path(output_dir, "corrected_spline_association_tests.csv"))
 
 make_newdata <- function(index_values) {
+  basis <- rcs_basis(index_values, spline_knots)
   data.frame(
     modified_kupperman_index = index_values,
+    modified_kupperman_rcs1 = basis[, 2L],
+    modified_kupperman_rcs2 = basis[, 3L],
     age_per_10_years = 0,
     marital_status = factor(
       rep(most_common_level(complete_data$marital_status), length(index_values)),
@@ -353,7 +363,8 @@ write_csv_utf8(adjusted_predictions, file.path(output_dir, "corrected_adjusted_p
 
 abstract_contrasts <- contrast_differences(
   spline_model, spline_vcov, abstract_newdata,
-  exposure = "modified_kupperman_index", reference_value = 0
+  exposure = "modified_kupperman_index", reference_value = 0,
+  reference_data = make_newdata(rep(0, length(abstract_index_values)))
 )
 abstract_contrasts$comparison <- paste0(
   "Kupperman index ", abstract_contrasts$exposure_value, " versus 0"
@@ -376,7 +387,8 @@ curve_index_values <- seq(
 )
 curve_data <- contrast_differences(
   spline_model, spline_vcov, make_newdata(curve_index_values),
-  exposure = "modified_kupperman_index", reference_value = 0
+  exposure = "modified_kupperman_index", reference_value = 0,
+  reference_data = make_newdata(rep(0, length(curve_index_values)))
 )
 write_csv_utf8(curve_data, file.path(output_dir, "corrected_adjusted_spline_curve.csv"))
 
