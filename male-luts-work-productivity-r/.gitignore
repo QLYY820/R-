@@ -1,0 +1,44 @@
+# Never upload participant-level or source data.
+data/**
+!data/README.md
+*.sav
+*.zsav
+*.dta
+*.sas7bdat
+*.rdata
+*.RData
+*.rds
+*.xlsx
+*.xls
+*.docx
+
+# Generated analysis artifacts and caches.
+00_audit/
+01_data/
+02_scales/
+03_lca/
+04_association/
+05_sensitivity/
+06_tables/
+07_figures/
+08_manuscript/
+09_logs/
+outputs/
+_work/
+_rendered/
+
+# R/RStudio and renv local state.
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+renv/library/
+renv/staging/
+renv/python/
+
+# Operating-system and temporary files.
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+*.zip
