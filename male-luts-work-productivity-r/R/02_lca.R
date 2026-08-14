@@ -43,10 +43,24 @@ fit_lca_grid <- function(data_x, tag = "ordinal", response_levels = 5L) {
                  maxiter = CFG$max_iterations, tol = 1e-8,
                  verbose = FALSE, graphs = FALSE, calc.se = FALSE)
   }
+  # PSOCK workers start fresh R sessions.  On managed/older servers the project
+  # renv autoloader can replace the library paths inherited from the parent
+  # session, so packages that are available to this process (notably poLCA)
+  # become invisible inside the workers.  Pass the verified parent paths to
+  # every worker before loading poLCA.
+  parent_libpaths <- .libPaths()
   cl <- parallel::makeCluster(min(4L, max(1L, parallel::detectCores(logical = FALSE) - 1L)))
   on.exit(parallel::stopCluster(cl), add = TRUE)
-  parallel::clusterExport(cl, c("data_x", "items", "CFG", "tag", "fit_one", "f"), envir = environment())
-  parallel::clusterEvalQ(cl, suppressPackageStartupMessages(library(poLCA)))
+  parallel::clusterExport(
+    cl,
+    c("data_x", "items", "CFG", "tag", "fit_one", "f", "parent_libpaths"),
+    envir = environment()
+  )
+  parallel::clusterEvalQ(cl, {
+    .libPaths(unique(c(parent_libpaths, .libPaths())))
+    suppressPackageStartupMessages(library(poLCA))
+    invisible(.libPaths())
+  })
 
   run_start_grid <- function(k_values, total_starts, chunks) {
     chunks <- max(1L, min(as.integer(chunks), as.integer(total_starts)))

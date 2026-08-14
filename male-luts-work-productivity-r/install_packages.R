@@ -3,7 +3,7 @@ if (!install_mode %in% c("preflight", "production")) {
   stop("LUTS_INSTALL_MODE must be 'preflight' or 'production'.", call. = FALSE)
 }
 
-preflight_packages <- c("data.table", "digest", "openxlsx", "psych")
+preflight_packages <- c("data.table", "digest", "openxlsx", "psych", "GPArotation")
 analysis_packages <- c("poLCA", "sandwich", "lmtest", "mclust", "ggplot2", "jsonlite")
 document_packages <- c("officer", "flextable")
 
