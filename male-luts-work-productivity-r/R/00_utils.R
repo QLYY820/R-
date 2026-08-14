@@ -1,8 +1,6 @@
 options(stringsAsFactors = FALSE, warn = 1)
 
-required_packages <- c("data.table", "digest", "openxlsx", "poLCA", "psych",
-                       "sandwich", "lmtest", "mclust", "ggplot2", "jsonlite",
-                       "splines", "car", "officer", "flextable", "readxl")
+required_packages <- c("data.table", "digest", "openxlsx", "psych")
 missing_packages <- required_packages[!vapply(required_packages, requireNamespace,
                                                logical(1), quietly = TRUE)]
 if (length(missing_packages)) stop("Missing R packages: ", paste(missing_packages, collapse = ", "))

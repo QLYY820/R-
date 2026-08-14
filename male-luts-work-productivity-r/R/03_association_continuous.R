@@ -278,15 +278,26 @@ write_csv_utf8(spline_pred, out_path("04_association", "continuous_luts_spline_p
 write_csv_utf8(spline_global, out_path("04_association", "continuous_luts_spline_global_test.csv"))
 write_csv_utf8(strategy, out_path("04_association", "analysis_strategy_comparison.csv"))
 
-# Diagnostics, VIF, influence, and complete-case comparison.
+# Diagnostics, coefficient-level VIF, influence, and complete-case comparison.
 bp <- lmtest::bptest(hard_fit)
 cooks <- cooks.distance(hard_fit)
-vif_obj <- tryCatch(car::vif(hard_fit), error = function(e) NULL)
-vif_table <- if (is.null(vif_obj)) data.table(term = NA_character_, VIF = NA_real_) else {
-  if (is.matrix(vif_obj)) data.table(term = rownames(vif_obj), GVIF = vif_obj[, 1], df = vif_obj[, 2],
-                                     adjusted_GVIF = vif_obj[, 1]^(1/(2 * vif_obj[, 2])))
-  else data.table(term = names(vif_obj), VIF = as.numeric(vif_obj))
+coefficient_vif <- function(fit) {
+  x <- model.matrix(fit)
+  x <- x[, colnames(x) != "(Intercept)", drop = FALSE]
+  keep <- apply(x, 2, function(z) is.finite(stats::var(z)) && stats::var(z) > 0)
+  x <- x[, keep, drop = FALSE]
+  if (ncol(x) < 2L) return(data.table(term = colnames(x), VIF = NA_real_))
+  values <- vapply(seq_len(ncol(x)), function(j) {
+    others <- x[, -j, drop = FALSE]
+    r2 <- tryCatch(summary(stats::lm(x[, j] ~ others))$r.squared,
+                   error = function(e) NA_real_)
+    if (!is.finite(r2)) return(NA_real_)
+    if (r2 >= 1) return(Inf)
+    1 / (1 - r2)
+  }, numeric(1))
+  data.table(term = colnames(x), VIF = values)
 }
+vif_table <- coefficient_vif(hard_fit)
 diagnostics <- data.table(
   diagnostic = c("Breusch-Pagan", "Residual skewness", "Residual kurtosis", "Design matrix condition number",
                  "Cook distance > 4/n", "Maximum Cook distance", "R2", "Adjusted R2"),

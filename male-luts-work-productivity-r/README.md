@@ -13,18 +13,25 @@
 
 ### 1. 打开工程并安装依赖
 
-双击 `male-luts-work-productivity.Rproj`，然后运行：
+双击 `male-luts-work-productivity.Rproj`。预审计阶段默认只安装4个必要包，不安装
+`pdftools`、`equatags`或其他仅用于建议功能的系统依赖：
 
 ```r
+Sys.setenv(LUTS_INSTALL_MODE = "preflight")
 source("install_packages.R", encoding = "UTF-8")
 source("check_environment.R", encoding = "UTF-8")
 ```
 
-如需完全恢复本次开发环境的包版本，可运行：
+完成预审计并准备拟合LCA前，再安装正式分析依赖：
 
 ```r
-renv::restore()
+Sys.setenv(LUTS_INSTALL_MODE = "production")
+source("install_packages.R", encoding = "UTF-8")
+source("check_environment.R", encoding = "UTF-8")
 ```
+
+`renv.lock`记录了开发环境（R 4.5）。堡垒机若使用R 4.1.x，不要运行
+`renv::restore()`；使用上述分阶段安装方式，让CRAN选择与服务器R版本兼容的包。
 
 ### 2. 载入真实数据
 
