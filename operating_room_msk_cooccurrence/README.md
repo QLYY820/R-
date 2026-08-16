@@ -15,6 +15,8 @@ The formal bastion-host run uses only:
 
 The import step forces every XLSX column to text before creating the RDS. If a valid nonempty all-text RDS already exists, it is reused and never overwritten automatically. Paths can be supplied through `OR_MSK_RAW_XLSX` and `OR_MSK_DATA_TEXT_RDS` only for controlled testing.
 
+For the bastion host's R 4.1 runtime, the package installer pins `xfun` 0.55 before installing the network-analysis dependency chain. This avoids an incompatibility between legacy dependencies and the removal of `xfun::attr()` in `xfun` 0.56.
+
 ## One-command entry point
 
 Formal foreground run:
