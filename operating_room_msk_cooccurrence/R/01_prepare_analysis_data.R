@@ -6,7 +6,7 @@
 
 options(stringsAsFactors = FALSE)
 if (.Platform$OS.type == "windows" && identical(Sys.getlocale("LC_CTYPE"), "C")) {
-  suppressWarnings(try(Sys.setlocale("LC_CTYPE", "Chinese"), silent = TRUE))
+  suppressWarnings(try(Sys.setlocale("LC_CTYPE", ".UTF-8"), silent = TRUE))
 }
 project_root <- normalizePath(Sys.getenv("OR_MSK_PROJECT_ROOT"), winslash = "/", mustWork = TRUE)
 source(Sys.getenv("OR_MSK_CONFIG"))
@@ -37,6 +37,7 @@ cat("openxlsx:", as.character(utils::packageVersion("openxlsx")), "\n")
 
 raw <- readRDS(input_path)
 if (!is.data.frame(raw) || nrow(raw) == 0L) stop("Input RDS must contain a nonempty data frame")
+source_raw_rows <- nrow(raw)
 
 first_present <- function(candidates, label) {
   present <- candidates[candidates %in% names(raw)]
@@ -45,14 +46,18 @@ first_present <- function(candidates, label) {
 }
 
 id_variable <- first_present(config$variables$id_candidates, "coded participant ID")
-age_variable <- first_present(config$variables$age_candidates, "age")
-work_years_variable <- first_present(config$variables$work_years_candidates, "nursing work duration")
-bmi_variable <- first_present(config$variables$bmi_candidates, "BMI")
-date_variables <- config$variables$survey_date_candidates[config$variables$survey_date_candidates %in% names(raw)]
-if (!length(date_variables)) stop("No configured survey submission-time column is present")
+response_time_variables <- config$variables$response_time_variables
+core_scale_variables <- intersect(
+  config$cohort_cleaning$core_scale_variables,
+  names(raw)
+)
+if (!length(core_scale_variables)) stop("No configured parent-cohort core-scale columns are present")
 
 required <- c(
-  id_variable, config$variables$department, age_variable, work_years_variable, bmi_variable,
+  id_variable, config$variables$department, config$variables$survey_date,
+  config$variables$birth_year, config$variables$work_start_year,
+  config$variables$height_cm, config$variables$weight_kg,
+  response_time_variables,
   "A_q2", "A_q5", "A_q6",
   "A_q10", "A_q11", "A_q12", "A_q13", "C_q1", "C_q6", "C_q7",
   "C_q8", "C_q9", "C_q10", "C_q24", "C_q42", "C_q44",
@@ -61,15 +66,91 @@ required <- c(
 missing_required <- setdiff(required, names(raw))
 if (length(missing_required)) stop("Missing required columns: ", paste(missing_required, collapse = ", "))
 
-department <- trimws(as.character(raw[["A_q9"]]))
-operating_room <- raw[
-  !is.na(department) & department == config$variables$operating_room_code,
-  ,
-  drop = FALSE
-]
-if (nrow(operating_room) == 0L) stop("No operating-room rows were found")
-
 to_num <- function(x) suppressWarnings(as.numeric(as.character(x)))
+is_blank <- function(x) is.na(x) | trimws(as.character(x)) == ""
+
+# Reproduce the prespecified TARGET parent-cohort cleaning before selecting the
+# operating-room subgroup. The submission time is intentionally `submittime`;
+# the suffixed fields belong to separate merged survey modules.
+id_text_raw <- trimws(as.character(raw[[id_variable]]))
+nonblank_id <- !is_blank(id_text_raw)
+duplicate_row <- rep(FALSE, nrow(raw))
+duplicate_row[nonblank_id] <- duplicated(id_text_raw[nonblank_id])
+duplicate_id_removed <- sum(duplicate_row)
+raw <- raw[!duplicate_row, , drop = FALSE]
+
+core_missing_matrix <- as.data.frame(lapply(
+  raw[core_scale_variables],
+  is_blank
+))
+core_missing_fraction <- rowMeans(core_missing_matrix)
+core_bad <- core_missing_fraction > config$cohort_cleaning$maximum_core_missing_fraction
+core_keep <- !core_bad
+
+survey_year_all <- extract_submission_year(raw[[config$variables$survey_date]])
+survey_year_all[
+  !is.na(survey_year_all) &
+    !survey_year_all %in% config$variables$survey_year_allowed
+] <- NA_integer_
+birth_year_all <- to_num(raw[[config$variables$birth_year]])
+work_start_year_all <- to_num(raw[[config$variables$work_start_year]])
+age_all <- survey_year_all - birth_year_all
+work_years_all <- survey_year_all - work_start_year_all
+nursing_entry_age_all <- work_start_year_all - birth_year_all
+
+response_time_matrix <- as.data.frame(lapply(
+  raw[response_time_variables],
+  to_num
+))
+total_response_time_all <- rowSums(response_time_matrix, na.rm = TRUE)
+total_response_time_all[rowSums(!is.na(response_time_matrix)) == 0L] <- NA_real_
+
+work_years_bad <- !is.na(work_years_all) &
+  work_years_all < config$cohort_cleaning$minimum_work_years
+keep_after_work_years <- core_keep & !work_years_bad
+nursing_entry_age_bad <- !is.na(nursing_entry_age_all) &
+  nursing_entry_age_all < config$cohort_cleaning$minimum_nursing_entry_age
+keep_after_entry_age <- keep_after_work_years & !nursing_entry_age_bad
+response_time_bad <- !is.na(total_response_time_all) &
+  total_response_time_all < config$cohort_cleaning$minimum_response_time_seconds
+clean_keep <- keep_after_entry_age & !response_time_bad
+
+cleaning_exclusions <- c(
+  duplicate_id = duplicate_id_removed,
+  core_missing = sum(core_bad),
+  work_years = sum(core_keep & work_years_bad),
+  nursing_entry_age = sum(keep_after_work_years & nursing_entry_age_bad),
+  response_time = sum(keep_after_entry_age & response_time_bad)
+)
+
+clean_raw <- raw[clean_keep, , drop = FALSE]
+clean_age <- age_all[clean_keep]
+clean_work_years <- work_years_all[clean_keep]
+clean_survey_year <- survey_year_all[clean_keep]
+clean_height <- to_num(clean_raw[[config$variables$height_cm]])
+clean_weight <- to_num(clean_raw[[config$variables$weight_kg]])
+clean_height[
+  clean_height < config$cohort_cleaning$valid_height_cm_range[[1L]] |
+    clean_height > config$cohort_cleaning$valid_height_cm_range[[2L]]
+] <- NA_real_
+clean_weight[
+  clean_weight < config$cohort_cleaning$valid_weight_kg_range[[1L]] |
+    clean_weight > config$cohort_cleaning$valid_weight_kg_range[[2L]]
+] <- NA_real_
+clean_bmi <- clean_weight / (clean_height / 100)^2
+
+if (source_raw_rows - sum(cleaning_exclusions) != nrow(clean_raw)) {
+  stop("Parent-cohort sample-flow reconciliation failed")
+}
+
+department <- trimws(as.character(clean_raw[[config$variables$department]]))
+operating_index <- !is.na(department) & department == config$variables$operating_room_code
+operating_room <- clean_raw[operating_index, , drop = FALSE]
+operating_age <- clean_age[operating_index]
+operating_work_years <- clean_work_years[operating_index]
+operating_bmi <- clean_bmi[operating_index]
+operating_survey_year <- clean_survey_year[operating_index]
+if (nrow(operating_room) == 0L) stop("No operating-room rows were found")
 
 recode_yes_no <- function(x) {
   value <- trimws(as.character(x))
@@ -100,9 +181,13 @@ for (question in 1:4) {
 primary_vars <- paste0(site_map$site, "_symptom_12m")
 analysis$multisite_burden_12m <- rowSums(analysis[primary_vars], na.rm = FALSE)
 
-analysis$age <- to_num(operating_room[[age_variable]])
-analysis$work_years <- to_num(operating_room[[work_years_variable]])
-analysis$BMI <- to_num(operating_room[[bmi_variable]])
+analysis$age <- operating_age
+analysis$age[
+  analysis$age < config$cohort_cleaning$valid_age_range[[1L]] |
+    analysis$age > config$cohort_cleaning$valid_age_range[[2L]]
+] <- NA_real_
+analysis$work_years <- operating_work_years
+analysis$BMI <- operating_bmi
 analysis$sex <- factor(as.character(operating_room[["A_q2"]]), levels = c("2", "1"), labels = c("Female", "Male"))
 analysis$education <- factor(as.character(operating_room[["A_q5"]]), levels = c("1", "2", "3", "4"), labels = c("Secondary", "College", "Bachelor", "Master_or_above"))
 analysis$bachelor_or_above <- factor(ifelse(as.character(operating_room[["A_q5"]]) %in% c("3", "4"), "Yes", "No"), levels = c("No", "Yes"))
@@ -124,18 +209,12 @@ analysis$overtime_weeks_last_month <- to_num(operating_room[["C_q42"]]) - 1
 overlap_code <- as.character(operating_room[["C_q44"]])
 analysis$work_sleep_overlap <- factor(ifelse(overlap_code == "-3", NA, ifelse(overlap_code == "1", "Yes", "No")), levels = c("No", "Yes"))
 
-parsed_years <- lapply(date_variables, function(variable) {
-  year <- extract_submission_year(operating_room[[variable]])
-  year[!is.na(year) & !year %in% config$variables$survey_year_allowed] <- NA_integer_
-  year
-})
-parse_counts <- vapply(parsed_years, function(value) sum(!is.na(value)), numeric(1))
-date_variable <- date_variables[[which.max(parse_counts)]]
-analysis$survey_year <- parsed_years[[which.max(parse_counts)]]
+analysis$survey_year <- operating_survey_year
 if (anyNA(analysis$survey_year)) {
   stop(
-    "Selected survey date column has values that are missing, unparseable, or outside ",
-    paste(range(config$variables$survey_year_allowed), collapse = "-"), ": ", date_variable,
+    "The operating-room survey year derived from ", config$variables$survey_date,
+    " has values that are missing, unparseable, or outside ",
+    paste(range(config$variables$survey_year_allowed), collapse = "-"),
     " (n=", sum(is.na(analysis$survey_year)), ")"
   )
 }
@@ -187,11 +266,17 @@ missingness <- do.call(rbind, lapply(summary_vars, function(variable) {
 
 sample_audit <- data.frame(
   metric = c(
-    "source_clean_rows", "operating_room_rows", "operating_room_percent",
+    "source_raw_rows", "duplicate_id_rows_removed", "core_missing_excluded_rows",
+    "work_years_lt_1_excluded_rows", "nursing_entry_age_lt_16_excluded_rows",
+    "response_time_lt_600_excluded_rows", "source_clean_rows",
+    "operating_room_rows", "operating_room_percent",
     "duplicate_coded_id_rows", "complete_primary_symptom_rows", "survey_year_missing_rows"
   ),
   value = c(
-    nrow(raw), nrow(analysis), nrow(analysis) / nrow(raw), duplicate_id_n,
+    source_raw_rows, cleaning_exclusions[["duplicate_id"]], cleaning_exclusions[["core_missing"]],
+    cleaning_exclusions[["work_years"]], cleaning_exclusions[["nursing_entry_age"]],
+    cleaning_exclusions[["response_time"]], nrow(clean_raw),
+    nrow(analysis), nrow(analysis) / nrow(clean_raw), duplicate_id_n,
     sum(stats::complete.cases(analysis[primary_vars])), sum(is.na(analysis$survey_year))
   )
 )
@@ -221,11 +306,17 @@ openxlsx::writeData(workbook, "top_patterns", pattern_table)
 openxlsx::writeData(workbook, "site_dictionary", site_map)
 openxlsx::saveWorkbook(workbook, file.path(output_dir, "data_audit_and_descriptives.xlsx"), overwrite = TRUE)
 
-cat("Source clean rows:", nrow(raw), "\n")
+cat("Source raw rows:", source_raw_rows, "\n")
+cat(
+  "Sequential exclusions:",
+  paste(names(cleaning_exclusions), cleaning_exclusions, sep = "=", collapse = "; "),
+  "\n"
+)
+cat("Source clean rows:", nrow(clean_raw), "\n")
 cat("Operating-room rows:", nrow(analysis), "\n")
 cat("Complete primary symptom rows:", sum(stats::complete.cases(analysis[primary_vars])), "\n")
 cat("Duplicate coded IDs:", duplicate_id_n, "\n")
-cat("Survey year source:", date_variable, "\n")
+cat("Survey year source:", config$variables$survey_date, "\n")
 cat("\nSite prevalence:\n")
 print(site_prevalence)
 cat("\nMissingness:\n")

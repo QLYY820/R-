@@ -4,8 +4,19 @@ Study design: cross-sectional secondary analysis of a nationwide multicenter nur
 
 ## Population
 
-- Include respondents whose department variable `A_q9` equals `7` (operating room).
-- Retain one record per coded participant ID after duplicate review.
+- Start from the fixed 64,114-row all-text TARGET source database.
+- Reproduce the prespecified parent-cohort cleaning before department selection: review coded-ID duplicates and core-scale missingness; sequentially exclude work experience below 1 year, estimated nursing-entry age below 16 years, and total response time below 600 seconds.
+- The expected cleaned parent cohort is 60,838 nurses. Then include respondents whose department variable `A_q9` equals `7` (operating room), yielding the fixed analysis sample of 3,744 nurses.
+- Submission year is parsed from `submittime`. The similarly named suffixed fields are merged-module timestamps and are not substituted for the final submission time.
+
+## Derived demographic and quality-control variables
+
+- Submission year: year parsed from `submittime`.
+- Age: submission year minus birth year (`A_year`); values outside 16-65 years are set to missing.
+- Nursing work duration: submission year minus nursing start year (`work_y`).
+- Estimated nursing-entry age: `work_y - A_year`.
+- Total response time: row sum of all four `timetaken*` module-duration fields, retaining missing only when all four fields are missing.
+- BMI: weight (`A_q16`) divided by squared height (`A_q15`) in metres after setting height outside 140-210 cm and weight outside 35-120 kg to missing.
 
 ## Primary latent-class and network indicators
 
@@ -45,7 +56,7 @@ The `E_q23_*` variables are treated as perceived occupational-hazard ratings, no
 
 ## Covariates
 
-Age (`A_year`), sex (`A_q2`), body mass index (`A_BMI`), years worked (`work_y`), education (`A_q5`), marital status (`A_q6`), employment type (`A_q10`), professional title (`A_q11`), administrative role (`A_q12`), and income (`A_q13`). Covariate inclusion is based on design and subject-matter relevance rather than significance screening alone.
+Derived age, sex (`A_q2`), derived body mass index, derived years worked, education (`A_q5`), marital status (`A_q6`), employment type (`A_q10`), professional title (`A_q11`), administrative role (`A_q12`), and income (`A_q13`). Covariate inclusion is based on design and subject-matter relevance rather than significance screening alone.
 
 ## Missing data
 

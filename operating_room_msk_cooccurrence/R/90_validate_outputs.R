@@ -5,7 +5,7 @@
 
 options(stringsAsFactors = FALSE)
 if (.Platform$OS.type == "windows" && identical(Sys.getlocale("LC_CTYPE"), "C")) {
-  suppressWarnings(try(Sys.setlocale("LC_CTYPE", "Chinese"), silent = TRUE))
+  suppressWarnings(try(Sys.setlocale("LC_CTYPE", ".UTF-8"), silent = TRUE))
 }
 seed <- as.integer(Sys.getenv("OR_MSK_SEED", "42"))
 set.seed(seed)
@@ -49,6 +49,17 @@ operating_n <- value_of("operating_room_rows")
 complete_n <- value_of("complete_primary_symptom_rows")
 if (anyNA(c(source_n, operating_n, complete_n))) stop("Sample audit lacks required metrics")
 if (operating_n <= 0 || operating_n > source_n || complete_n > operating_n) stop("Sample-flow reconciliation failed")
+if (identical(Sys.getenv("OR_MSK_MODE", "formal"), "formal")) {
+  flow_metrics <- c(
+    "source_raw_rows", "duplicate_id_rows_removed", "core_missing_excluded_rows",
+    "work_years_lt_1_excluded_rows", "nursing_entry_age_lt_16_excluded_rows",
+    "response_time_lt_600_excluded_rows", "source_clean_rows"
+  )
+  flow <- vapply(flow_metrics, value_of, numeric(1))
+  if (anyNA(flow) || flow[[1L]] - sum(flow[2:6]) != flow[[7L]]) {
+    stop("Formal parent-cohort exclusion counts do not reconcile")
+  }
+}
 
 assignments <- data.table::fread(file.path(run_root, "models", "lca_class_assignments.csv"), data.table = FALSE)
 if (nrow(assignments) != complete_n) stop("LCA assignment count does not match complete symptom records")

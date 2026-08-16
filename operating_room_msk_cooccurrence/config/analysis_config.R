@@ -30,14 +30,32 @@ build_analysis_config <- function(project_root, mode = c("formal", "test"), outp
       id_candidates = c("id", "ID"),
       department = "A_q9",
       operating_room_code = "7",
-      age_candidates = c("A_year", "age"),
-      work_years_candidates = c("work_y", "work_years"),
-      bmi_candidates = c("A_BMI", "BMI"),
-      survey_date_candidates = c("submittime", "submittime.x", "submittime.y"),
+      survey_date = "submittime",
       survey_year_allowed = 2021:2025,
+      birth_year = "A_year",
+      work_start_year = "work_y",
+      height_cm = "A_q15",
+      weight_kg = "A_q16",
+      response_time_variables = c(
+        "timetaken.x", "timetaken.y", "timetaken.x.x", "timetaken.y.y"
+      ),
       symptom_prefix = "E_q24_",
       sites = c("neck", "shoulder", "upper_back", "elbow", "wrist_hand", "lower_back", "hip_thigh", "knee", "ankle_foot"),
       site_labels = c("Neck", "Shoulder", "Upper back", "Elbow", "Wrist/hand", "Lower back", "Hip/thigh", "Knee", "Ankle/foot")
+    ),
+    cohort_cleaning = list(
+      core_scale_variables = unique(c(
+        paste0("D_q22_", 1:7), paste0("D_q23_", 1:9),
+        paste0("D_q24_", 1:10), paste0("D_q19_", 1:8),
+        paste0("F_q3_", 1:22), paste0("D_q10_", 1:7), "D_PSQI_ALL"
+      )),
+      maximum_core_missing_fraction = 0.30,
+      minimum_work_years = 1,
+      minimum_nursing_entry_age = 16,
+      minimum_response_time_seconds = 600,
+      valid_age_range = c(16, 65),
+      valid_height_cm_range = c(140, 210),
+      valid_weight_kg_range = c(35, 120)
     ),
     runtime = if (mode == "formal") {
       list(

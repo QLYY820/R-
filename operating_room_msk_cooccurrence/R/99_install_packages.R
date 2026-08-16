@@ -1,6 +1,6 @@
 options(repos = c(CRAN = "https://cloud.r-project.org"))
 if (.Platform$OS.type == "windows" && identical(Sys.getlocale("LC_CTYPE"), "C")) {
-  suppressWarnings(try(Sys.setlocale("LC_CTYPE", "Chinese"), silent = TRUE))
+  suppressWarnings(try(Sys.setlocale("LC_CTYPE", ".UTF-8"), silent = TRUE))
 }
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) != 1L) stop("Usage: Rscript R/99_install_packages.R <analysis_config.R>")

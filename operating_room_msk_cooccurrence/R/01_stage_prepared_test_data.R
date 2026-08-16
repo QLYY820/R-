@@ -5,7 +5,7 @@
 
 options(stringsAsFactors = FALSE)
 if (.Platform$OS.type == "windows" && identical(Sys.getlocale("LC_CTYPE"), "C")) {
-  suppressWarnings(try(Sys.setlocale("LC_CTYPE", "Chinese"), silent = TRUE))
+  suppressWarnings(try(Sys.setlocale("LC_CTYPE", ".UTF-8"), silent = TRUE))
 }
 seed <- as.integer(Sys.getenv("OR_MSK_SEED", "42"))
 set.seed(seed)
