@@ -34,6 +34,7 @@ build_analysis_config <- function(project_root, mode = c("formal", "test"), outp
       work_years_candidates = c("work_y", "work_years"),
       bmi_candidates = c("A_BMI", "BMI"),
       survey_date_candidates = c("submittime", "submittime.x", "submittime.y"),
+      survey_year_allowed = 2021:2025,
       symptom_prefix = "E_q24_",
       sites = c("neck", "shoulder", "upper_back", "elbow", "wrist_hand", "lower_back", "hip_thigh", "knee", "ankle_foot"),
       site_labels = c("Neck", "Shoulder", "Upper back", "Elbow", "Wrist/hand", "Lower back", "Hip/thigh", "Knee", "Ankle/foot")

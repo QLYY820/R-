@@ -10,6 +10,7 @@ if (.Platform$OS.type == "windows" && identical(Sys.getlocale("LC_CTYPE"), "C"))
 }
 project_root <- normalizePath(Sys.getenv("OR_MSK_PROJECT_ROOT"), winslash = "/", mustWork = TRUE)
 source(Sys.getenv("OR_MSK_CONFIG"))
+source(file.path(project_root, "R", "date_utils.R"))
 config <- build_analysis_config(
   project_root,
   mode = Sys.getenv("OR_MSK_MODE", "formal"),
@@ -123,25 +124,21 @@ analysis$overtime_weeks_last_month <- to_num(operating_room[["C_q42"]]) - 1
 overlap_code <- as.character(operating_room[["C_q44"]])
 analysis$work_sleep_overlap <- factor(ifelse(overlap_code == "-3", NA, ifelse(overlap_code == "1", "Yes", "No")), levels = c("No", "Yes"))
 
-parse_submission_time <- function(x) {
-  suppressWarnings(as.POSIXct(
-    trimws(as.character(x)),
-    tz = "UTC",
-    tryFormats = c(
-      "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
-      "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M",
-      "%Y-%m-%d", "%Y/%m/%d"
-    )
-  ))
-}
-parsed_dates <- lapply(date_variables, function(variable) parse_submission_time(operating_room[[variable]]))
-parse_counts <- vapply(parsed_dates, function(value) sum(!is.na(value)), numeric(1))
+parsed_years <- lapply(date_variables, function(variable) {
+  year <- extract_submission_year(operating_room[[variable]])
+  year[!is.na(year) & !year %in% config$variables$survey_year_allowed] <- NA_integer_
+  year
+})
+parse_counts <- vapply(parsed_years, function(value) sum(!is.na(value)), numeric(1))
 date_variable <- date_variables[[which.max(parse_counts)]]
-submission_time <- parsed_dates[[which.max(parse_counts)]]
-if (anyNA(submission_time)) {
-  stop("Selected survey date column has unparseable values: ", date_variable, " (n=", sum(is.na(submission_time)), ")")
+analysis$survey_year <- parsed_years[[which.max(parse_counts)]]
+if (anyNA(analysis$survey_year)) {
+  stop(
+    "Selected survey date column has values that are missing, unparseable, or outside ",
+    paste(range(config$variables$survey_year_allowed), collapse = "-"), ": ", date_variable,
+    " (n=", sum(is.na(analysis$survey_year)), ")"
+  )
 }
-analysis$survey_year <- as.integer(format(submission_time, "%Y"))
 
 id_text <- trimws(as.character(operating_room[[id_variable]]))
 duplicate_id_n <- sum(duplicated(id_text[id_text != "" & !is.na(id_text)]))
