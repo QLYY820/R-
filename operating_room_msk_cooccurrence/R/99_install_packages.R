@@ -15,11 +15,11 @@ installed <- utils::installed.packages()
 xfun_version <- if ("xfun" %in% rownames(installed)) {
   package_version(installed["xfun", "Version"])
 } else {
-  package_version("0")
+  package_version("0.0.0")
 }
 if (
   getRversion() < package_version("4.2.0") &&
-    (xfun_version == package_version("0") || xfun_version >= package_version("0.56"))
+    (xfun_version == package_version("0.0.0") || xfun_version >= package_version("0.56"))
 ) {
   message("Pinning xfun 0.55 for the R 4.1 network-analysis dependency chain.")
   install.packages(
