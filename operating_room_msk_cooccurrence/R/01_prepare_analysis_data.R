@@ -55,6 +55,7 @@ if (!length(core_scale_variables)) stop("No configured parent-cohort core-scale 
 
 required <- c(
   id_variable, config$variables$department, config$variables$survey_date,
+  config$variables$survey_date_secondary,
   config$variables$birth_year, config$variables$work_start_year,
   config$variables$height_cm, config$variables$weight_kg,
   response_time_variables,
@@ -70,8 +71,8 @@ to_num <- function(x) suppressWarnings(as.numeric(as.character(x)))
 is_blank <- function(x) is.na(x) | trimws(as.character(x)) == ""
 
 # Reproduce the prespecified TARGET parent-cohort cleaning before selecting the
-# operating-room subgroup. The submission time is intentionally `submittime`;
-# the suffixed fields belong to separate merged survey modules.
+# operating-room subgroup. The primary time is `submittime`; when it is absent,
+# the two merged-module timestamps are used only if their available years agree.
 id_text_raw <- trimws(as.character(raw[[id_variable]]))
 nonblank_id <- !is_blank(id_text_raw)
 duplicate_row <- rep(FALSE, nrow(raw))
@@ -87,11 +88,13 @@ core_missing_fraction <- rowMeans(core_missing_matrix)
 core_bad <- core_missing_fraction > config$cohort_cleaning$maximum_core_missing_fraction
 core_keep <- !core_bad
 
-survey_year_all <- extract_submission_year(raw[[config$variables$survey_date]])
-survey_year_all[
-  !is.na(survey_year_all) &
-    !survey_year_all %in% config$variables$survey_year_allowed
-] <- NA_integer_
+survey_year_resolution <- resolve_submission_year(
+  primary = raw[[config$variables$survey_date]],
+  secondary = lapply(config$variables$survey_date_secondary, function(variable) raw[[variable]]),
+  allowed_years = config$variables$survey_year_allowed
+)
+survey_year_all <- survey_year_resolution$year
+survey_year_source_all <- survey_year_resolution$source
 birth_year_all <- to_num(raw[[config$variables$birth_year]])
 work_start_year_all <- to_num(raw[[config$variables$work_start_year]])
 age_all <- survey_year_all - birth_year_all
@@ -127,6 +130,7 @@ clean_raw <- raw[clean_keep, , drop = FALSE]
 clean_age <- age_all[clean_keep]
 clean_work_years <- work_years_all[clean_keep]
 clean_survey_year <- survey_year_all[clean_keep]
+clean_survey_year_source <- survey_year_source_all[clean_keep]
 clean_height <- to_num(clean_raw[[config$variables$height_cm]])
 clean_weight <- to_num(clean_raw[[config$variables$weight_kg]])
 clean_height[
@@ -144,12 +148,16 @@ if (source_raw_rows - sum(cleaning_exclusions) != nrow(clean_raw)) {
 }
 
 department <- trimws(as.character(clean_raw[[config$variables$department]]))
-operating_index <- !is.na(department) & department == config$variables$operating_room_code
+operating_candidate_index <- !is.na(department) & department == config$variables$operating_room_code
+survey_year_unresolved <- is.na(clean_survey_year)
+survey_year_unresolved_excluded <- sum(operating_candidate_index & survey_year_unresolved)
+operating_index <- operating_candidate_index & !survey_year_unresolved
 operating_room <- clean_raw[operating_index, , drop = FALSE]
 operating_age <- clean_age[operating_index]
 operating_work_years <- clean_work_years[operating_index]
 operating_bmi <- clean_bmi[operating_index]
 operating_survey_year <- clean_survey_year[operating_index]
+operating_survey_year_source <- clean_survey_year_source[operating_index]
 if (nrow(operating_room) == 0L) stop("No operating-room rows were found")
 
 recode_yes_no <- function(x) {
@@ -269,6 +277,9 @@ sample_audit <- data.frame(
     "source_raw_rows", "duplicate_id_rows_removed", "core_missing_excluded_rows",
     "work_years_lt_1_excluded_rows", "nursing_entry_age_lt_16_excluded_rows",
     "response_time_lt_600_excluded_rows", "source_clean_rows",
+    "operating_room_rows_before_survey_year_exclusion",
+    "survey_year_secondary_consensus_rows", "survey_year_conflict_excluded_rows",
+    "survey_year_missing_all_sources_excluded_rows", "survey_year_unresolved_excluded_rows",
     "operating_room_rows", "operating_room_percent",
     "duplicate_coded_id_rows", "complete_primary_symptom_rows", "survey_year_missing_rows"
   ),
@@ -276,6 +287,11 @@ sample_audit <- data.frame(
     source_raw_rows, cleaning_exclusions[["duplicate_id"]], cleaning_exclusions[["core_missing"]],
     cleaning_exclusions[["work_years"]], cleaning_exclusions[["nursing_entry_age"]],
     cleaning_exclusions[["response_time"]], nrow(clean_raw),
+    sum(operating_candidate_index),
+    sum(operating_survey_year_source == "secondary_consensus"),
+    sum(operating_candidate_index & clean_survey_year_source == "secondary_conflict"),
+    sum(operating_candidate_index & clean_survey_year_source == "unresolved"),
+    survey_year_unresolved_excluded,
     nrow(analysis), nrow(analysis) / nrow(clean_raw), duplicate_id_n,
     sum(stats::complete.cases(analysis[primary_vars])), sum(is.na(analysis$survey_year))
   )
@@ -313,10 +329,13 @@ cat(
   "\n"
 )
 cat("Source clean rows:", nrow(clean_raw), "\n")
+cat("Operating-room rows before survey-year exclusion:", sum(operating_candidate_index), "\n")
+cat("Survey years filled by secondary consensus:", sum(operating_survey_year_source == "secondary_consensus"), "\n")
+cat("Unresolved survey-year rows excluded:", survey_year_unresolved_excluded, "\n")
 cat("Operating-room rows:", nrow(analysis), "\n")
 cat("Complete primary symptom rows:", sum(stats::complete.cases(analysis[primary_vars])), "\n")
 cat("Duplicate coded IDs:", duplicate_id_n, "\n")
-cat("Survey year source:", config$variables$survey_date, "\n")
+cat("Survey year rule: primary submittime; agreeing secondary timestamps as fallback\n")
 cat("\nSite prevalence:\n")
 print(site_prevalence)
 cat("\nMissingness:\n")

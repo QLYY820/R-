@@ -59,6 +59,14 @@ if (identical(Sys.getenv("OR_MSK_MODE", "formal"), "formal")) {
   if (anyNA(flow) || flow[[1L]] - sum(flow[2:6]) != flow[[7L]]) {
     stop("Formal parent-cohort exclusion counts do not reconcile")
   }
+  operating_before_year <- value_of("operating_room_rows_before_survey_year_exclusion")
+  unresolved_year <- value_of("survey_year_unresolved_excluded_rows")
+  if (
+    anyNA(c(operating_before_year, unresolved_year)) ||
+      operating_before_year - unresolved_year != operating_n
+  ) {
+    stop("Formal operating-room survey-year exclusion counts do not reconcile")
+  }
 }
 
 assignments <- data.table::fread(file.path(run_root, "models", "lca_class_assignments.csv"), data.table = FALSE)

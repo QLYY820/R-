@@ -7,11 +7,11 @@ Study design: cross-sectional secondary analysis of a nationwide multicenter nur
 - Start from the fixed 64,114-row all-text TARGET source database.
 - Reproduce the prespecified parent-cohort cleaning before department selection: review coded-ID duplicates and core-scale missingness; sequentially exclude work experience below 1 year, estimated nursing-entry age below 16 years, and total response time below 600 seconds.
 - The expected cleaned parent cohort is 60,838 nurses. Then include respondents whose department variable `A_q9` equals `7` (operating room), yielding the fixed analysis sample of 3,744 nurses.
-- Submission year is parsed from `submittime`. The similarly named suffixed fields are merged-module timestamps and are not substituted for the final submission time.
+- Submission year is parsed primarily from `submittime`. If it is unavailable, `submittime.x` and `submittime.y` are used only when their available years agree (or only one is available). Records with conflicting secondary years or no usable year in any configured timestamp are excluded from the operating-room analysis and counted explicitly.
 
 ## Derived demographic and quality-control variables
 
-- Submission year: year parsed from `submittime`.
+- Submission year: primary year from `submittime`, with agreeing merged-module timestamps used as a prespecified fallback.
 - Age: submission year minus birth year (`A_year`); values outside 16-65 years are set to missing.
 - Nursing work duration: submission year minus nursing start year (`work_y`).
 - Estimated nursing-entry age: `work_y - A_year`.

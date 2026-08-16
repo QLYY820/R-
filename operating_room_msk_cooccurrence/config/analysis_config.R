@@ -31,6 +31,7 @@ build_analysis_config <- function(project_root, mode = c("formal", "test"), outp
       department = "A_q9",
       operating_room_code = "7",
       survey_date = "submittime",
+      survey_date_secondary = c("submittime.x", "submittime.y"),
       survey_year_allowed = 2021:2025,
       birth_year = "A_year",
       work_start_year = "work_y",

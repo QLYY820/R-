@@ -17,6 +17,8 @@ The import step forces every XLSX column to text before creating the RDS. If a v
 
 The formal preparation step reproduces the prespecified parent-cohort cleaning before selecting the operating-room subgroup and validates the computed sample-flow arithmetic. On the audited source data, this reproduces the flow from 64,114 source rows to 60,838 cleaned nurses and then to 3,744 operating-room nurses. Age, work duration, and BMI are derived from their source fields; `A_year`, `work_y`, and raw `A_BMI` are not used directly as those analysis variables.
 
+Survey year is taken from `submittime`. When that value is unavailable, the two merged-module timestamps are accepted only if their available years are unambiguous; unresolved or conflicting rows are excluded from the operating-room analysis and reported in the sample-flow audit.
+
 For the bastion host's R 4.1 runtime, the package installer pins `xfun` 0.55 before installing the network-analysis dependency chain. This avoids an incompatibility between legacy dependencies and the removal of `xfun::attr()` in `xfun` 0.56.
 
 ## One-command entry point

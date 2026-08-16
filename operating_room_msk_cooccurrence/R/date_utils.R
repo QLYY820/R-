@@ -30,3 +30,38 @@ extract_submission_year <- function(x) {
   }
   year
 }
+
+resolve_submission_year <- function(primary, secondary = list(), allowed_years = integer()) {
+  primary_year <- extract_submission_year(primary)
+  if (length(allowed_years)) {
+    primary_year[!is.na(primary_year) & !primary_year %in% allowed_years] <- NA_integer_
+  }
+
+  secondary_years <- lapply(secondary, extract_submission_year)
+  if (length(allowed_years) && length(secondary_years)) {
+    secondary_years <- lapply(secondary_years, function(x) {
+      x[!is.na(x) & !x %in% allowed_years] <- NA_integer_
+      x
+    })
+  }
+
+  resolved <- primary_year
+  resolution_source <- rep("primary", length(primary_year))
+  resolution_source[is.na(primary_year)] <- "unresolved"
+
+  if (length(secondary_years)) {
+    secondary_matrix <- do.call(cbind, secondary_years)
+    if (is.null(dim(secondary_matrix))) secondary_matrix <- matrix(secondary_matrix, ncol = 1L)
+    for (index in which(is.na(primary_year))) {
+      available <- unique(secondary_matrix[index, !is.na(secondary_matrix[index, ]), drop = TRUE])
+      if (length(available) == 1L) {
+        resolved[[index]] <- as.integer(available[[1L]])
+        resolution_source[[index]] <- "secondary_consensus"
+      } else if (length(available) > 1L) {
+        resolution_source[[index]] <- "secondary_conflict"
+      }
+    }
+  }
+
+  list(year = as.integer(resolved), source = resolution_source)
+}
