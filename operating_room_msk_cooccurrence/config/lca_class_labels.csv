@@ -1,0 +1,6 @@
+latent_class,class_label_en,class_label_cn,presentation_order
+4,Low burden,低负担型,1
+1,Neck-shoulder dominant,颈肩主导型,2
+2,Limb-predominant intermediate burden,肢体主导的中等负担型,3
+3,Multisite moderate-high burden,多部位中高负担型,4
+5,Generalized high burden,全身高负担型,5
