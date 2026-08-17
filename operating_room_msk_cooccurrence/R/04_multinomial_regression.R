@@ -86,15 +86,55 @@ primary_predictors <- c(
 )
 auxiliary_predictors <- c("work_years5", "multisite_burden_12m", "night_shifts_per_month", "work_sleep_overlap", "night_busy_score")
 mi_variables <- unique(c("class_outcome", primary_predictors, auxiliary_predictors))
-mi_data <- analysis[mi_variables]
+mi_data <- droplevels(analysis[mi_variables])
+numeric_variables <- names(mi_data)[vapply(mi_data, is.numeric, logical(1))]
+for (variable in numeric_variables) {
+  nonfinite <- !is.na(mi_data[[variable]]) & !is.finite(mi_data[[variable]])
+  if (any(nonfinite)) mi_data[[variable]][nonfinite] <- NA_real_
+}
 
 method <- mice::make.method(mi_data)
 method[] <- ""
 method["BMI5"] <- "pmm"
 predictor_matrix <- mice::make.predictorMatrix(mi_data)
-diag(predictor_matrix) <- 0
-predictor_matrix[, c("night_shifts_per_month", "work_sleep_overlap", "night_busy_score")] <- 0
-predictor_matrix["BMI5", c("class_outcome", "age10", "sex", "work_years5", "multisite_burden_12m", "bachelor_or_above", "married", "income_numeric", "survey_year")] <- 1
+predictor_matrix[,] <- 0
+bmi_predictor_candidates <- c(
+  "class_outcome", "age10", "sex", "work_years5", "multisite_burden_12m",
+  "bachelor_or_above", "married", "income_numeric", "survey_year"
+)
+is_usable_imputation_predictor <- function(x) {
+  observed <- x[!is.na(x)]
+  length(observed) == length(x) && length(unique(observed)) > 1L
+}
+bmi_predictor_used <- vapply(
+  mi_data[bmi_predictor_candidates],
+  is_usable_imputation_predictor,
+  logical(1)
+)
+predictor_matrix["BMI5", names(bmi_predictor_used)[bmi_predictor_used]] <- 1
+if (!any(bmi_predictor_used)) stop("No complete, nonconstant predictors are available for BMI imputation")
+
+mi_audit <- data.frame(
+  variable = names(mi_data),
+  storage_class = vapply(mi_data, function(x) paste(class(x), collapse = "/"), character(1)),
+  missing_n = vapply(mi_data, function(x) sum(is.na(x)), numeric(1)),
+  nonfinite_n = vapply(mi_data, function(x) {
+    if (is.numeric(x)) sum(!is.na(x) & !is.finite(x)) else 0
+  }, numeric(1)),
+  unique_nonmissing = vapply(mi_data, function(x) length(unique(x[!is.na(x)])), numeric(1)),
+  bmi_imputation_predictor = names(mi_data) %in% names(bmi_predictor_used)[bmi_predictor_used],
+  stringsAsFactors = FALSE
+)
+data.table::fwrite(mi_audit, file.path(output_dir, "multinomial_mi_variable_audit.csv"), bom = TRUE)
+cat(
+  "BMI imputation predictors:",
+  paste(names(bmi_predictor_used)[bmi_predictor_used], collapse = ", "),
+  "\n"
+)
+excluded_bmi_predictors <- names(bmi_predictor_used)[!bmi_predictor_used]
+if (length(excluded_bmi_predictors)) {
+  cat("BMI predictor candidates excluded for missingness/zero variance:", paste(excluded_bmi_predictors, collapse = ", "), "\n")
+}
 
 cat(
   "Running MICE with", config$runtime$mice_m, "imputed datasets and",
