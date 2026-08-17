@@ -57,7 +57,17 @@ survey_year_path <- file.path(dirname(input_path), "operating_room_survey_year.c
 if (!file.exists(survey_year_path)) stop("Missing survey-year reconciliation file: ", survey_year_path)
 survey_year_data <- data.table::fread(survey_year_path, data.table = FALSE)
 if (!all(c("row_id", "survey_year") %in% names(survey_year_data))) stop("Survey-year file must contain row_id and survey_year")
-analysis <- merge(analysis, survey_year_data, by = "row_id", all.x = TRUE, sort = FALSE)
+survey_year_matched <- survey_year_data$survey_year[match(analysis$row_id, survey_year_data$row_id)]
+if ("survey_year" %in% names(analysis)) {
+  if (
+    anyNA(survey_year_matched) ||
+      !identical(as.integer(analysis$survey_year), as.integer(survey_year_matched))
+  ) {
+    stop("Survey year in the analysis RDS does not reconcile with its companion file")
+  }
+} else {
+  analysis$survey_year <- survey_year_matched
+}
 analysis <- analysis[order(analysis$row_id), ]
 if (anyNA(analysis$survey_year)) stop("Survey year was not reconciled for every analysis row")
 outcome_levels <- class_labels$class_label_en

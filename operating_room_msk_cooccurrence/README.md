@@ -35,6 +35,12 @@ Formal background run:
 bash run_bastion.sh
 ```
 
+If an interrupted run has already completed data preparation, LCA, and Ising analysis, resume regression into a new output directory without overwriting the source run:
+
+```bash
+Rscript resume_from_models.R /path/to/interrupted_run /path/to/new_resume_output formal
+```
+
 Local test mode using a deidentified prepared analysis RDS:
 
 ```bash
