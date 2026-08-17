@@ -41,6 +41,12 @@ If an interrupted run has already completed data preparation, LCA, and Ising ana
 Rscript resume_from_models.R /path/to/interrupted_run /path/to/new_resume_output formal
 ```
 
+On the bastion host, the same resume can be launched in the background with PID, log, output, and exit-code paths returned immediately:
+
+```bash
+bash resume_bastion.sh /path/to/interrupted_run
+```
+
 Local test mode using a deidentified prepared analysis RDS:
 
 ```bash
