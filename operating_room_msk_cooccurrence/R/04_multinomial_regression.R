@@ -93,11 +93,6 @@ for (variable in numeric_variables) {
   if (any(nonfinite)) mi_data[[variable]][nonfinite] <- NA_real_
 }
 
-method <- mice::make.method(mi_data)
-method[] <- ""
-method["BMI5"] <- "pmm"
-predictor_matrix <- mice::make.predictorMatrix(mi_data)
-predictor_matrix[,] <- 0
 bmi_predictor_candidates <- c(
   "class_outcome", "age10", "sex", "work_years5", "multisite_burden_12m",
   "bachelor_or_above", "married", "income_numeric", "survey_year"
@@ -111,8 +106,42 @@ bmi_predictor_used <- vapply(
   is_usable_imputation_predictor,
   logical(1)
 )
-predictor_matrix["BMI5", names(bmi_predictor_used)[bmi_predictor_used]] <- 1
 if (!any(bmi_predictor_used)) stop("No complete, nonconstant predictors are available for BMI imputation")
+
+# R 4.1 can fail inside MICE when factor contrasts are generated implicitly.
+# Build a finite, full-rank numeric design explicitly, while retaining the
+# original factor variables for every regression model after imputation.
+bmi_predictor_frame <- mi_data[names(bmi_predictor_used)[bmi_predictor_used]]
+bmi_predictor_frame[] <- lapply(bmi_predictor_frame, function(x) {
+  if (is.factor(x) || is.ordered(x)) factor(as.character(x)) else x
+})
+bmi_design_all <- stats::model.matrix(
+  ~ .,
+  data = bmi_predictor_frame,
+  na.action = stats::na.pass
+)
+bmi_design_all <- bmi_design_all[, colnames(bmi_design_all) != "(Intercept)", drop = FALSE]
+storage.mode(bmi_design_all) <- "double"
+finite_nonconstant <- vapply(seq_len(ncol(bmi_design_all)), function(index) {
+  values <- bmi_design_all[, index]
+  all(is.finite(values)) && length(unique(values)) > 1L
+}, logical(1))
+bmi_design <- bmi_design_all[, finite_nonconstant, drop = FALSE]
+if (!ncol(bmi_design)) stop("BMI imputation dummy design has no finite, nonconstant columns")
+design_with_intercept <- cbind(.intercept = 1, bmi_design)
+design_qr <- qr(design_with_intercept, tol = 1e-07, LAPACK = FALSE)
+full_rank_with_intercept <- design_qr$pivot[seq_len(design_qr$rank)]
+full_rank_columns <- sort(full_rank_with_intercept[full_rank_with_intercept > 1L] - 1L)
+bmi_design <- bmi_design[, full_rank_columns, drop = FALSE]
+colnames(bmi_design) <- make.names(colnames(bmi_design), unique = TRUE)
+
+imputation_data <- data.frame(BMI5 = mi_data$BMI5, bmi_design, check.names = FALSE)
+method <- mice::make.method(imputation_data)
+method[] <- ""
+method["BMI5"] <- "pmm"
+predictor_matrix <- mice::make.predictorMatrix(imputation_data)
+predictor_matrix[,] <- 0
+predictor_matrix["BMI5", setdiff(names(imputation_data), "BMI5")] <- 1
 
 mi_audit <- data.frame(
   variable = names(mi_data),
@@ -126,11 +155,22 @@ mi_audit <- data.frame(
   stringsAsFactors = FALSE
 )
 data.table::fwrite(mi_audit, file.path(output_dir, "multinomial_mi_variable_audit.csv"), bom = TRUE)
+data.table::fwrite(
+  data.frame(
+    dummy_column = colnames(bmi_design),
+    finite = vapply(seq_len(ncol(bmi_design)), function(index) all(is.finite(bmi_design[, index])), logical(1)),
+    unique_values = vapply(seq_len(ncol(bmi_design)), function(index) length(unique(bmi_design[, index])), numeric(1)),
+    stringsAsFactors = FALSE
+  ),
+  file.path(output_dir, "multinomial_mi_numeric_design_audit.csv"),
+  bom = TRUE
+)
 cat(
   "BMI imputation predictors:",
   paste(names(bmi_predictor_used)[bmi_predictor_used], collapse = ", "),
   "\n"
 )
+cat("BMI numeric dummy predictors retained:", ncol(bmi_design), "\n")
 excluded_bmi_predictors <- names(bmi_predictor_used)[!bmi_predictor_used]
 if (length(excluded_bmi_predictors)) {
   cat("BMI predictor candidates excluded for missingness/zero variance:", paste(excluded_bmi_predictors, collapse = ", "), "\n")
@@ -141,7 +181,7 @@ cat(
   config$runtime$mice_maxit, "iterations; BMI missing n =", sum(is.na(mi_data$BMI5)), "\n"
 )
 imputation <- mice::mice(
-  mi_data,
+  imputation_data,
   m = config$runtime$mice_m,
   maxit = config$runtime$mice_maxit,
   method = method,
@@ -150,7 +190,12 @@ imputation <- mice::mice(
   printFlag = FALSE
 )
 saveRDS(imputation, file.path(output_dir, "multinomial_mice_imputation.rds"))
-imputed_sets <- lapply(seq_len(imputation$m), function(index) mice::complete(imputation, index))
+imputed_sets <- lapply(seq_len(imputation$m), function(index) {
+  completed_numeric <- mice::complete(imputation, index)
+  completed_analysis <- mi_data
+  completed_analysis$BMI5 <- completed_numeric$BMI5
+  completed_analysis
+})
 
 linear_primary_formula <- stats::as.formula(paste("class_outcome ~", paste(primary_predictors, collapse = " + ")))
 primary_formula <- class_outcome ~ any_night_shift + overtime_weeks_last_month +
