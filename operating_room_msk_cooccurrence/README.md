@@ -4,7 +4,7 @@
 
 - Project name: `operating_room_msk_cooccurrence`
 - Research question: identify latent multisite musculoskeletal symptom profiles and the core symptom network among operating-room nurses, then estimate cross-sectional associations of work-time factors with profile membership.
-- Statistical analyses: descriptive prevalence with Wilson 95% CIs; 1-7 class latent class analysis; EBIC-regularized Ising network with AND rule and bootstrap stability; multinomial logistic regression with 20-dataset MICE, survey-year adjustment, multiplicity control, sensitivity analyses, diagnostics, and model-based adjusted probabilities.
+- Statistical analyses: descriptive prevalence with Wilson 95% CIs; 1-7 class latent class analysis; EBIC-regularized Ising network with AND rule and bootstrap stability; complete-case multinomial logistic regression after excluding records with missing BMI, survey-year adjustment, multiplicity control, sensitivity analyses, diagnostics, and model-based adjusted probabilities.
 
 ## Fixed data source
 
@@ -55,7 +55,7 @@ Rscript run_all.R --mode=test \
   --output-root=/new/nonexistent/output/directory
 ```
 
-Test mode reduces LCA starts, network bootstraps, MICE datasets/iterations, and posterior draws. It must never be used for manuscript estimates.
+Test mode reduces LCA starts, network bootstraps, and posterior draws. It must never be used for manuscript estimates.
 
 ## Output safety
 

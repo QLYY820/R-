@@ -27,8 +27,8 @@ required <- c(
   "models/ising_adjacency_matrix.csv",
   "models/ising_centrality.csv",
   "models/ising_stability.csv",
-  "tables/multinomial_primary_mice.csv",
-  "tables/multinomial_complete_case_sensitivity.csv",
+  "tables/multinomial_primary_complete_case.csv",
+  "tables/regression_complete_case_audit.csv",
   "tables/multinomial_posterior_draw_sensitivity.csv",
   "tables/multinomial_vif_primary.csv",
   "tables/multinomial_linearity_test.csv",
@@ -80,7 +80,27 @@ if (nrow(matrix_values) != ncol(matrix_values)) stop("Ising adjacency matrix is 
 if (max(abs(matrix_values - t(matrix_values)), na.rm = TRUE) > 1e-10) stop("Ising adjacency matrix is not symmetric")
 if (max(abs(diag(matrix_values)), na.rm = TRUE) > 1e-10) stop("Ising adjacency diagonal is not zero")
 
-primary <- data.table::fread(file.path(run_root, "tables", "multinomial_primary_mice.csv"), data.table = FALSE)
+regression_audit <- data.table::fread(file.path(run_root, "tables", "regression_complete_case_audit.csv"), data.table = FALSE)
+regression_value <- function(metric) as.numeric(regression_audit$value[match(metric, regression_audit$metric)])
+regression_input_n <- regression_value("regression_input_rows")
+bmi_excluded_n <- regression_value("bmi_missing_or_nonfinite_excluded_rows")
+regression_n <- regression_value("regression_complete_case_rows")
+primary_model_n <- regression_value("primary_model_complete_rows")
+if (anyNA(c(regression_input_n, bmi_excluded_n, regression_n, primary_model_n))) {
+  stop("Regression sample audit lacks required metrics")
+}
+if (
+  regression_input_n != nrow(assignments) ||
+    regression_input_n - bmi_excluded_n != regression_n ||
+    regression_n != primary_model_n
+) {
+  stop("BMI complete-case regression sample arithmetic failed")
+}
+model_fit <- data.table::fread(file.path(run_root, "tables", "multinomial_model_fit_summary.csv"), data.table = FALSE)
+fitted_n <- as.numeric(model_fit$estimate[match("n", model_fit$metric)])
+if (is.na(fitted_n) || fitted_n != regression_n) stop("Primary fitted sample does not match regression audit")
+
+primary <- data.table::fread(file.path(run_root, "tables", "multinomial_primary_complete_case.csv"), data.table = FALSE)
 needed_primary <- c("y.level", "term", "OR", "ci_lower", "ci_upper", "p_value")
 if (!all(needed_primary %in% names(primary))) stop("Primary regression output lacks required columns")
 if (any(!is.finite(primary$OR)) || any(primary$ci_lower > primary$OR) || any(primary$ci_upper < primary$OR)) {
@@ -88,13 +108,14 @@ if (any(!is.finite(primary$OR)) || any(primary$ci_lower > primary$OR) || any(pri
 }
 
 summary <- data.frame(
-  check = c("required_outputs", "sample_flow", "lca_assignments", "ising_matrix", "primary_or_ci"),
+  check = c("required_outputs", "sample_flow", "lca_assignments", "ising_matrix", "regression_sample", "primary_or_ci"),
   status = "PASS",
   detail = c(
     paste(length(required), "required files exist and are nonempty"),
     paste0("source=", source_n, "; operating_room=", operating_n, "; complete_symptoms=", complete_n),
     paste(nrow(assignments), "unique assignments"),
     paste(nrow(matrix_values), "symmetric nodes; zero diagonal"),
+    paste0("input=", regression_input_n, "; BMI excluded=", bmi_excluded_n, "; fitted=", regression_n),
     paste(nrow(primary), "primary coefficient rows with coherent 95% CIs")
   ),
   stringsAsFactors = FALSE

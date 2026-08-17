@@ -14,7 +14,7 @@ config <- build_analysis_config(project_root, mode = "test", output_root = file.
 stopifnot(config$seed == 42L)
 stopifnot(config$mode == "test")
 stopifnot(config$runtime$network_boots < 1000L)
-stopifnot(config$runtime$mice_m < 20L)
+stopifnot(config$runtime$posterior_draws < 20L)
 stopifnot(basename(config$paths$raw_xlsx) == "data.xlsx")
 stopifnot(basename(config$paths$data_text_rds) == "data_text.rds")
 stopifnot(length(config$variables$sites) == 9L)

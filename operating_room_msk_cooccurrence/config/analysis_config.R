@@ -66,8 +66,6 @@ build_analysis_config <- function(project_root, mode = c("formal", "test"), outp
         lca_selected_starts = 100L,
         network_boots = 1000L,
         network_cores = 4L,
-        mice_m = 20L,
-        mice_maxit = 10L,
         posterior_draws = 20L
       )
     } else {
@@ -78,14 +76,12 @@ build_analysis_config <- function(project_root, mode = c("formal", "test"), outp
         lca_selected_starts = 3L,
         network_boots = 20L,
         network_cores = 2L,
-        mice_m = 2L,
-        mice_maxit = 2L,
         posterior_draws = 2L
       )
     },
     packages = c(
       "readxl", "data.table", "openxlsx", "poLCA", "bootnet", "qgraph",
-      "IsingFit", "ggplot2", "scales", "mice", "nnet", "broom"
+      "IsingFit", "ggplot2", "scales", "nnet", "broom"
     )
   )
 }

@@ -62,4 +62,4 @@ Derived age, sex (`A_q2`), derived body mass index, derived years worked, educat
 
 - Report missingness for every analysis variable.
 - Primary latent class analysis uses complete symptom-indicator records because the indicators are binary and the expected missingness is audited before modeling.
-- Regression uses complete cases if total model-variable missingness is at most 5%; otherwise multiple imputation is considered and reported.
+- Multinomial regression excludes records with missing or non-finite BMI and uses the remaining complete cases. The number excluded and the final regression sample size are reported in a dedicated aggregate audit table; the LCA and symptom-network samples are not reduced by this regression-stage exclusion.
