@@ -1,0 +1,12 @@
+/outputs/
+/transfer/
+/logs/
+*.rds
+*.RData
+*.Rhistory
+*.xlsx
+*.xls
+*.csv
+*.sav
+*.zip
+~$*
